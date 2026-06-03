@@ -1,0 +1,9 @@
+.git
+.idea
+.env
+*.log
+**/target
+flowlens-ui/node_modules
+flowlens-ui/dist
+collectors/douyin/__pycache__
+**/__pycache__

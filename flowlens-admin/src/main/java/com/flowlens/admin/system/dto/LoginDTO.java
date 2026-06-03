@@ -1,0 +1,14 @@
+package com.flowlens.admin.system.dto;
+
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+
+@Data
+public class LoginDTO {
+
+    @NotBlank(message = "不能为空")
+    private String username;
+
+    @NotBlank(message = "不能为空")
+    private String password;
+}

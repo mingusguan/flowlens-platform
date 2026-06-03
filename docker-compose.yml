@@ -1,0 +1,37 @@
+services:
+  flowlens-admin:
+    image: ${FLOWLENS_IMAGE_REPOSITORY:-registry.cn-hangzhou.aliyuncs.com/your-namespace/flowlens-admin}:${FLOWLENS_IMAGE_TAG:-latest}
+    container_name: flowlens-admin
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx768m}
+      FLOWLENS_DB_URL: ${FLOWLENS_DB_URL:-jdbc:mysql://host.docker.internal:13306/flowlens-platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+      FLOWLENS_DB_USERNAME: ${FLOWLENS_DB_USERNAME:-flowlens}
+      FLOWLENS_DB_PASSWORD: ${FLOWLENS_DB_PASSWORD:-flowlens_change_me}
+      FLOWLENS_JWT_ISSUER: ${FLOWLENS_JWT_ISSUER:-flowlens}
+      FLOWLENS_JWT_SECRET: ${FLOWLENS_JWT_SECRET:-flowlens-docker-secret-change-before-production-2026}
+      FLOWLENS_JWT_EXPIRE_MINUTES: ${FLOWLENS_JWT_EXPIRE_MINUTES:-480}
+      FLOWLENS_BACKEND_URL: ${FLOWLENS_BACKEND_URL:-http://127.0.0.1:8088}
+      FLOWLENS_LIVE_CLOUD_ENABLED: ${FLOWLENS_LIVE_CLOUD_ENABLED:-true}
+      FLOWLENS_LIVE_COLLECTOR_PROBE_ENABLED: ${FLOWLENS_LIVE_COLLECTOR_PROBE_ENABLED:-true}
+      FLOWLENS_LIVE_COLLECTOR_EXECUTABLE: ${FLOWLENS_LIVE_COLLECTOR_EXECUTABLE:-python3}
+      FLOWLENS_LIVE_COLLECTOR_SCRIPT: ${FLOWLENS_LIVE_COLLECTOR_SCRIPT:-/app/collectors/douyin/saermart_adapter.py}
+      FLOWLENS_DOUYIN_FETCHER_PATH: ${FLOWLENS_DOUYIN_FETCHER_PATH:-/opt/DouyinLiveWebFetcher}
+      FLOWLENS_DOUYIN_USE_LOCAL_DEPS: ${FLOWLENS_DOUYIN_USE_LOCAL_DEPS:-false}
+      FLOWLENS_LIVE_COLLECTOR_SCHEDULE_DELAY_MS: ${FLOWLENS_LIVE_COLLECTOR_SCHEDULE_DELAY_MS:-30000}
+      FLOWLENS_LIVE_COLLECTOR_PROBE_DELAY_MS: ${FLOWLENS_LIVE_COLLECTOR_PROBE_DELAY_MS:-60000}
+      FLOWLENS_LIVE_COLLECTOR_PROBE_TIMEOUT_SECONDS: ${FLOWLENS_LIVE_COLLECTOR_PROBE_TIMEOUT_SECONDS:-15}
+      FLOWLENS_LIVE_CLIENT_TIMEOUT_SECONDS: ${FLOWLENS_LIVE_CLIENT_TIMEOUT_SECONDS:-45}
+    ports:
+      - "${FLOWLENS_ADMIN_PORT:-8088}:8088"
+    volumes:
+      - ${FLOWLENS_DOUYIN_FETCHER_HOST_PATH:-/data/mingus/flowlens/DouyinLiveWebFetcher}:/opt/DouyinLiveWebFetcher:ro
+    networks:
+      - shared
+networks:
+  shared:
+    name: ${SHARED_NETWORK:-mingus-net}
+    external: true

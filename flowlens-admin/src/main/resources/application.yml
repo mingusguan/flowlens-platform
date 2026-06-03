@@ -1,0 +1,47 @@
+server:
+  port: ${SERVER_PORT:8088}
+
+spring:
+  application:
+    name: flowlens-admin
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${FLOWLENS_DB_URL:jdbc:mysql://localhost:13306/flowlens-platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${FLOWLENS_DB_USERNAME:root}
+    password: ${FLOWLENS_DB_PASSWORD:Zx29jTJhfh1DEY}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+flowlens:
+  jwt:
+    issuer: ${FLOWLENS_JWT_ISSUER:flowlens}
+    secret: ${FLOWLENS_JWT_SECRET:flowlens-development-secret-key-change-before-production-2026}
+    expire-minutes: ${FLOWLENS_JWT_EXPIRE_MINUTES:480}
+  live:
+    collector:
+      client-timeout-seconds: ${FLOWLENS_LIVE_CLIENT_TIMEOUT_SECONDS:45}
+      schedule-delay-ms: ${FLOWLENS_LIVE_COLLECTOR_SCHEDULE_DELAY_MS:30000}
+      probe-enabled: ${FLOWLENS_LIVE_COLLECTOR_PROBE_ENABLED:true}
+      probe-delay-ms: ${FLOWLENS_LIVE_COLLECTOR_PROBE_DELAY_MS:60000}
+      probe-timeout-seconds: ${FLOWLENS_LIVE_COLLECTOR_PROBE_TIMEOUT_SECONDS:15}
+      cloud-enabled: ${FLOWLENS_LIVE_CLOUD_ENABLED:true}
+      executable: ${FLOWLENS_LIVE_COLLECTOR_EXECUTABLE:python}
+      args:
+        - ${FLOWLENS_LIVE_COLLECTOR_SCRIPT:E:/JAVA/flowlens-platform/collectors/douyin/saermart_adapter.py}
+        - --fetcher-path
+        - ${FLOWLENS_DOUYIN_FETCHER_PATH:E:/JAVA/DouyinLiveWebFetcher}
+        - --backend-url
+        - ${FLOWLENS_BACKEND_URL:http://127.0.0.1:8088}
+        - --anchor-id
+        - "{anchorId}"
+        - --token
+        - "{reportToken}"
+        - --live-id
+        - "{liveId}"
+        - --room-id
+        - "{roomId}"

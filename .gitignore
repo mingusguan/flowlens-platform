@@ -1,0 +1,9 @@
+.env
+*.log
+*.tar
+*.tar.gz
+*.zip
+flowlens-ui/node_modules/
+flowlens-ui/dist/
+**/target/
+**/__pycache__/
