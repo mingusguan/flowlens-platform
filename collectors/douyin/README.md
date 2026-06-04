@@ -77,6 +77,7 @@ a `v.douyin.com` short link, or the URL suffix. Useful options:
 - `--speech-volume 90`
 - `--list-voices`
 - `--voice "Microsoft Huihui Desktop"`
+- `--speech-bitness 32 --voice "Ekho Mandarin"`
 - `--speech-engine print`
 
 ### VoxCPM speech engine

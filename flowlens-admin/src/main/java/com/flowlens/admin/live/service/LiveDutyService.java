@@ -367,9 +367,14 @@ public class LiveDutyService {
         anchor.ensureEnabled();
         LiveSession session = ensureRunningSession(anchor, dto.getLiveId(), dto.getRoomId(), dto.getLiveTitle(), source);
         LocalDateTime defaultEventTime = LocalDateTime.now();
-        String monthSuffix = LiveEventTableRouter.resolveMonthSuffix(dto.getEventTime() == null ? defaultEventTime : dto.getEventTime());
-        shardTableService.ensureMonthTables(monthSuffix);
         LiveEvent event = LiveEvent.fromReport(session, dto, source, defaultEventTime);
+        if (!shouldPersistEventDetail(event)) {
+            updateEventStats(event);
+            logReceivedEvent(event);
+            return;
+        }
+        String monthSuffix = LiveEventTableRouter.resolveMonthSuffix(event.getEventTime());
+        shardTableService.ensureMonthTables(monthSuffix);
         LiveEventTableRouter.useMonth(monthSuffix);
         try {
             if (hasDuplicateEvent(event)) {
@@ -390,6 +395,12 @@ public class LiveDutyService {
             session.end();
             sessionMapper.updateById(session);
         }
+    }
+
+    private boolean shouldPersistEventDetail(LiveEvent event) {
+        // 观看人数快照和进房事件频率高，只参与场次统计，不写入月度事件明细表。
+        return !LiveEvent.TYPE_ROOM_STATS.equals(event.getEventType())
+            && !LiveEvent.TYPE_MEMBER.equals(event.getEventType());
     }
 
     private void saveRawPayload(LiveEvent event, String rawPayload) {

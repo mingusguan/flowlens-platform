@@ -58,7 +58,6 @@ insert into live_session_stat (
     like_count,
     gift_count,
     gift_value,
-    viewer_count,
     create_time,
     update_time
 )
@@ -69,7 +68,6 @@ select
     sum(case when event_type = 'LIKE' then like_count else 0 end) as like_count,
     sum(case when event_type = 'GIFT' then gift_count else 0 end) as gift_count,
     sum(case when event_type = 'GIFT' then gift_value else 0 end) as gift_value,
-    max(case when event_type = 'ROOM_STATS' then viewer_count else 0 end) as viewer_count,
     min(create_time) as create_time,
     now() as update_time
 from live_event
@@ -80,7 +78,6 @@ on duplicate key update
     like_count = values(like_count),
     gift_count = values(gift_count),
     gift_value = values(gift_value),
-    viewer_count = values(viewer_count),
     update_time = values(update_time);
 
 insert into live_user_gift_stat (
