@@ -244,6 +244,12 @@ def has_stream_url(room: dict[str, Any]) -> bool:
     )
 
 
+def live_from_room_status(room_status: int | None) -> bool | None:
+    if room_status is None:
+        return None
+    return room_status == 0
+
+
 def resolve_reflow_room(room_id: str) -> ResolvedLiveInput:
     url = (
         "https://webcast.amemv.com/webcast/room/reflow/info/"
@@ -265,13 +271,15 @@ def resolve_reflow_room(room_id: str) -> ResolvedLiveInput:
     live_id = first_text(json_get(room, "owner", "web_rid"))
     live_title = first_text(room.get("title"))
     room_status = int_or_none(room.get("status"))
-    live = has_stream_url(room)
+    stream_available = has_stream_url(room)
+    live = live_from_room_status(room_status)
     LOG.info(
-        "resolved reflow room room_id=%s live_id=%s room_status=%s live=%s title=%s",
+        "resolved reflow room room_id=%s live_id=%s room_status=%s live=%s stream_available=%s title=%s",
         resolved_room_id,
         live_id,
         room_status,
         live,
+        stream_available,
         live_title,
     )
     return ResolvedLiveInput(

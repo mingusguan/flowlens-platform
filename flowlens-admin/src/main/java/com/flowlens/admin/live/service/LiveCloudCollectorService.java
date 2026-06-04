@@ -327,9 +327,15 @@ public class LiveCloudCollectorService {
         if (result == null) {
             return CloudProbeResult.notLive("probe json not found");
         }
+        Integer roomStatus = result.path("roomStatus").isMissingNode() || result.path("roomStatus").isNull() ? null : result.path("roomStatus").asInt();
+        boolean live = result.path("live").asBoolean(false);
+        if (roomStatus != null && roomStatus != 0) {
+            // 抖音开播状态以 roomStatus=0 为准，避免旧脚本把非直播状态的流地址误判成开播。
+            live = false;
+        }
         return new CloudProbeResult(
-            result.path("live").asBoolean(false),
-            result.path("roomStatus").isMissingNode() || result.path("roomStatus").isNull() ? null : result.path("roomStatus").asInt(),
+            live,
+            roomStatus,
             textOrNull(result.path("liveId")),
             textOrNull(result.path("roomId")),
             textOrNull(result.path("liveTitle")),
