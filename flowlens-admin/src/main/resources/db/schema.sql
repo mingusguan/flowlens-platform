@@ -78,7 +78,6 @@ create table live_anchor (
     id bigint not null auto_increment comment '主播ID',
     anchor_name varchar(80) not null comment '主播名称',
     douyin_live_id varchar(80) comment '抖音直播间ID',
-    room_id varchar(80) comment '直播房间ID',
     report_token varchar(80) not null comment '客户端上报密钥',
     status tinyint not null default 1 comment '主播状态：1启用，0停用',
     cloud_collect_enabled tinyint not null default 1 comment '是否启用云端兜底采集：1启用，0停用',
@@ -91,8 +90,7 @@ create table live_anchor (
     update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
     primary key (id),
     unique key uk_live_anchor_report_token (report_token),
-    key idx_live_anchor_live_id (douyin_live_id),
-    key idx_live_anchor_room_id (room_id)
+    key idx_live_anchor_live_id (douyin_live_id)
 ) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci comment='直播主播表';
 
 create table live_session (
@@ -121,7 +119,7 @@ create table live_event (
     room_id varchar(80) comment '房间ID',
     live_id varchar(80) comment '直播间ID',
     msg_id varchar(120) comment '平台消息ID',
-    event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注',
+    event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注，ROOM_STATS直播间统计',
     source varchar(24) not null comment '事件来源：CLIENT客户端，CLOUD云端',
     user_id varchar(80) comment '观众用户ID',
     douyin_account varchar(120) comment '观众可搜索的抖音号',
@@ -132,6 +130,7 @@ create table live_event (
     gift_count int not null default 0 comment '礼物数量',
     gift_value bigint not null default 0 comment '礼物价值',
     like_count bigint not null default 0 comment '点赞数量',
+    viewer_count bigint not null default 0 comment '累计观看人数快照',
     event_time datetime not null comment '事件发生时间',
     create_time datetime not null default current_timestamp comment '创建时间',
     primary key (id),
@@ -166,6 +165,7 @@ create table live_session_stat (
     like_count bigint not null default 0 comment '累计点赞数量',
     gift_count bigint not null default 0 comment '累计礼物数量',
     gift_value bigint not null default 0 comment '累计礼物价值',
+    viewer_count bigint not null default 0 comment '累计观看人数',
     create_time datetime not null default current_timestamp comment '创建时间',
     update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
     primary key (id),
@@ -177,7 +177,7 @@ create table live_user_gift_stat (
     id bigint not null auto_increment comment '直播用户礼物统计ID',
     session_id bigint not null comment '直播场次ID',
     anchor_id bigint not null comment '主播ID',
-    user_key varchar(160) not null comment '观众聚合键，优先使用用户ID，其次抖音号或昵称',
+    user_key varchar(160) not null comment '观众聚合键，优先用户身份，私密用户按消息或事件隔离',
     user_id varchar(80) comment '观众用户ID',
     douyin_account varchar(120) comment '观众可搜索的抖音号',
     nickname varchar(120) comment '观众昵称',

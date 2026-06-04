@@ -19,6 +19,7 @@ create table if not exists live_session_stat (
     like_count bigint not null default 0 comment '累计点赞数量',
     gift_count bigint not null default 0 comment '累计礼物数量',
     gift_value bigint not null default 0 comment '累计礼物价值',
+    viewer_count bigint not null default 0 comment '累计观看人数',
     create_time datetime not null default current_timestamp comment '创建时间',
     update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
     primary key (id),
@@ -30,7 +31,7 @@ create table if not exists live_user_gift_stat (
     id bigint not null auto_increment comment '直播用户礼物统计ID',
     session_id bigint not null comment '直播场次ID',
     anchor_id bigint not null comment '主播ID',
-    user_key varchar(160) not null comment '观众聚合键，优先使用用户ID，其次抖音号或昵称',
+    user_key varchar(160) not null comment '观众聚合键，优先用户身份，私密用户按消息或事件隔离',
     user_id varchar(80) comment '观众用户ID',
     douyin_account varchar(120) comment '观众可搜索的抖音号',
     nickname varchar(120) comment '观众昵称',
@@ -57,6 +58,7 @@ insert into live_session_stat (
     like_count,
     gift_count,
     gift_value,
+    viewer_count,
     create_time,
     update_time
 )
@@ -67,6 +69,7 @@ select
     sum(case when event_type = 'LIKE' then like_count else 0 end) as like_count,
     sum(case when event_type = 'GIFT' then gift_count else 0 end) as gift_count,
     sum(case when event_type = 'GIFT' then gift_value else 0 end) as gift_value,
+    max(case when event_type = 'ROOM_STATS' then viewer_count else 0 end) as viewer_count,
     min(create_time) as create_time,
     now() as update_time
 from live_event
@@ -77,6 +80,7 @@ on duplicate key update
     like_count = values(like_count),
     gift_count = values(gift_count),
     gift_value = values(gift_value),
+    viewer_count = values(viewer_count),
     update_time = values(update_time);
 
 insert into live_user_gift_stat (
@@ -95,7 +99,7 @@ insert into live_user_gift_stat (
 select
     session_id,
     min(anchor_id) as anchor_id,
-    coalesce(nullif(user_id, ''), nullif(douyin_account, ''), nullif(nickname, ''), 'unknown') as user_key,
+    coalesce(nullif(user_id, ''), nullif(douyin_account, ''), nullif(nickname, ''), concat('anonymous-event:', id)) as user_key,
     max(nullif(user_id, '')) as user_id,
     max(nullif(douyin_account, '')) as douyin_account,
     max(nullif(nickname, '')) as nickname,
@@ -106,7 +110,7 @@ select
     now() as update_time
 from live_event
 where event_type = 'GIFT'
-group by session_id, coalesce(nullif(user_id, ''), nullif(douyin_account, ''), nullif(nickname, ''), 'unknown')
+group by session_id, coalesce(nullif(user_id, ''), nullif(douyin_account, ''), nullif(nickname, ''), concat('anonymous-event:', id))
 on duplicate key update
     anchor_id = values(anchor_id),
     user_id = values(user_id),

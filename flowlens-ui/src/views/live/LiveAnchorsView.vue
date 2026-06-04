@@ -28,14 +28,12 @@ const activeAnchor = ref<LiveAnchorItem>()
 const form = reactive<LiveAnchorItem>({
   anchorName: '',
   douyinLiveId: '',
-  roomId: '',
   status: 1,
   cloudCollectEnabled: 1
 })
 
 const startForm = reactive({
   liveId: '',
-  roomId: '',
   liveTitle: ''
 })
 
@@ -73,7 +71,6 @@ const openDialog = (row?: LiveAnchorItem) => {
     id: undefined,
     anchorName: '',
     douyinLiveId: '',
-    roomId: '',
     status: 1,
     cloudCollectEnabled: 1
   })
@@ -98,7 +95,6 @@ const openStartDialog = (row: LiveAnchorItem) => {
   activeAnchor.value = row
   Object.assign(startForm, {
     liveId: row.douyinLiveId || '',
-    roomId: row.roomId || '',
     liveTitle: ''
   })
   startDialogVisible.value = true
@@ -206,7 +202,7 @@ onMounted(loadData)
           <thead>
             <tr>
               <th>主播</th>
-              <th>直播间</th>
+              <th>liveId</th>
               <th>客户端</th>
               <th>采集源</th>
               <th>上报密钥</th>
@@ -228,7 +224,6 @@ onMounted(loadData)
               <td>
                 <div class="live-cell">
                   <span>{{ row.douyinLiveId || '-' }}</span>
-                  <small>room {{ row.roomId || '-' }}</small>
                 </div>
               </td>
               <td>
@@ -326,15 +321,9 @@ onMounted(loadData)
             <label class="form-field-label">主播名称</label>
             <input v-model="form.anchorName" class="form-field-control" placeholder="例如：灵犀直播间" />
           </div>
-          <div class="form-row">
-            <div class="form-field-group">
-              <label class="form-field-label">抖音 live_id</label>
-              <input v-model="form.douyinLiveId" class="form-field-control" placeholder="直播间 URL 后缀" />
-            </div>
-            <div class="form-field-group">
-              <label class="form-field-label">room_id</label>
-              <input v-model="form.roomId" class="form-field-control" placeholder="可选" />
-            </div>
+          <div class="form-field-group">
+            <label class="form-field-label">抖音直播链接/分享文案</label>
+            <input v-model="form.douyinLiveId" class="form-field-control" placeholder="粘贴手机分享文案、短链或 live_id" />
           </div>
           <div class="form-field-group">
             <label class="form-field-label">云端兜底采集</label>
@@ -375,15 +364,9 @@ onMounted(loadData)
             <label class="form-field-label">场次标题</label>
             <input v-model="startForm.liveTitle" class="form-field-control" placeholder="可选" />
           </div>
-          <div class="form-row">
-            <div class="form-field-group">
-              <label class="form-field-label">抖音 live_id</label>
-              <input v-model="startForm.liveId" class="form-field-control" />
-            </div>
-            <div class="form-field-group">
-              <label class="form-field-label">room_id</label>
-              <input v-model="startForm.roomId" class="form-field-control" />
-            </div>
+          <div class="form-field-group">
+            <label class="form-field-label">抖音直播链接/分享文案</label>
+            <input v-model="startForm.liveId" class="form-field-control" placeholder="粘贴手机分享文案、短链或 live_id" />
           </div>
         </div>
         <div class="modal-footer">
@@ -406,6 +389,10 @@ onMounted(loadData)
               <strong>{{ selectedSummary.commentCount }}</strong>
             </div>
             <div class="summary-item">
+              <span>观看人数</span>
+              <strong>{{ selectedSummary.viewerCount }}</strong>
+            </div>
+            <div class="summary-item">
               <span>点赞数</span>
               <strong>{{ selectedSummary.likeCount }}</strong>
             </div>
@@ -419,7 +406,7 @@ onMounted(loadData)
             </div>
           </div>
           <div class="ranking-list summary-rank">
-            <div class="ranking-item" v-for="(item, index) in selectedSummary.giftRank" :key="item.userId || item.douyinAccount || item.nickname">
+            <div class="ranking-item" v-for="(item, index) in selectedSummary.giftRank" :key="item.rankKey || item.userId || item.douyinAccount || item.nickname">
               <div class="rank-badge" :class="{ top: index < 3 }">{{ index + 1 }}</div>
               <div class="rank-info">
                 <span class="rank-title">{{ item.nickname }}</span>

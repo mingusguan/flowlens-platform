@@ -7,3 +7,4 @@ flowlens-ui/node_modules/
 flowlens-ui/dist/
 **/target/
 **/__pycache__/
+collectors/douyin/.cache/

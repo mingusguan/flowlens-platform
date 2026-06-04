@@ -23,6 +23,7 @@ import com.flowlens.admin.live.mapper.LiveSessionStatMapper;
 import com.flowlens.admin.live.mapper.LiveUserGiftStatMapper;
 import com.flowlens.admin.live.sharding.LiveEventShardTableService;
 import com.flowlens.admin.live.sharding.LiveEventTableRouter;
+import com.flowlens.admin.live.service.DouyinLiveInputResolver.ResolvedDouyinLiveInput;
 import com.flowlens.admin.live.vo.LiveAnchorVO;
 import com.flowlens.admin.live.vo.LiveCollectorTaskVO;
 import com.flowlens.admin.live.vo.LiveGiftRankVO;
@@ -69,15 +70,15 @@ public class LiveDutyService {
 
     private final LiveEventShardTableService shardTableService;
 
+    private final DouyinLiveInputResolver douyinLiveInputResolver;
+
     public List<LiveAnchorVO> listAnchors(String keyword) {
         LambdaQueryWrapper<LiveAnchor> wrapper = new LambdaQueryWrapper<LiveAnchor>()
             .orderByDesc(LiveAnchor::getCreateTime);
         if (StringUtils.hasText(keyword)) {
             wrapper.and(item -> item.like(LiveAnchor::getAnchorName, keyword)
                 .or()
-                .like(LiveAnchor::getDouyinLiveId, keyword)
-                .or()
-                .like(LiveAnchor::getRoomId, keyword));
+                .like(LiveAnchor::getDouyinLiveId, keyword));
         }
         return anchorMapper.selectList(wrapper).stream()
             .map(this::toAnchorVO)
@@ -109,8 +110,14 @@ public class LiveDutyService {
         if (exists != null) {
             return toSessionVO(exists, Map.of(anchor.getId(), anchor));
         }
-        String liveId = firstText(dto.getLiveId(), anchor.getDouyinLiveId());
-        String roomId = firstText(dto.getRoomId(), anchor.getRoomId());
+        ResolvedDouyinLiveInput resolvedInput = douyinLiveInputResolver.resolve(dto.getLiveId());
+        String inputLiveId = firstText(resolvedInput.liveId(), resolvedInput.canonicalInput());
+        if (!StringUtils.hasText(inputLiveId) && !StringUtils.hasText(resolvedInput.roomId())) {
+            inputLiveId = firstText(dto.getLiveId());
+        }
+        String liveId = firstText(inputLiveId, anchor.getDouyinLiveId());
+        String roomId = firstText(dto.getRoomId(), resolvedInput.roomId());
+        String liveTitle = firstText(dto.getLiveTitle(), resolvedInput.liveTitle());
         String source = anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())
             ? LiveSession.SOURCE_CLIENT
             : LiveSession.SOURCE_NONE;
@@ -118,7 +125,7 @@ public class LiveDutyService {
             .anchorId(anchorId)
             .liveId(liveId)
             .roomId(roomId)
-            .liveTitle(dto.getLiveTitle())
+            .liveTitle(liveTitle)
             .activeSource(source)
             .build());
         sessionMapper.insert(session);
@@ -174,6 +181,7 @@ public class LiveDutyService {
             .likeCount(stat == null ? 0L : stat.getLikeCount())
             .giftCount(stat == null ? 0 : safeLongToInt(stat.getGiftCount()))
             .giftValue(stat == null ? 0L : stat.getGiftValue())
+            .viewerCount(stat == null ? 0L : stat.getViewerCount())
             .giftRank(buildGiftRank(sessionId))
             .build();
     }
@@ -232,17 +240,19 @@ public class LiveDutyService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public LiveSession startCloudDetectedSession(LiveAnchor anchor, String roomId, String liveTitle) {
+    public LiveSession startCloudDetectedSession(LiveAnchor anchor, String liveId, String roomId, String liveTitle) {
         anchor.ensureEnabled();
         LiveSession running = findRunningSession(anchor.getId());
         if (running != null) {
+            running.fillProbeInfo(liveId, roomId, liveTitle);
+            sessionMapper.updateById(running);
             return running;
         }
         // Probe only confirms live status; the source switches to CLOUD after collector startup.
         LiveSession session = LiveSession.start(LiveSession.StartSessionCommand.builder()
             .anchorId(anchor.getId())
-            .liveId(anchor.getDouyinLiveId())
-            .roomId(firstText(roomId, anchor.getRoomId()))
+            .liveId(firstText(liveId, anchor.getDouyinLiveId()))
+            .roomId(roomId)
             .liveTitle(liveTitle)
             .activeSource(LiveSession.SOURCE_NONE)
             .build());
@@ -278,6 +288,19 @@ public class LiveDutyService {
         LiveAnchor anchor = requireAnchor(session.getAnchorId());
         anchor.changeCloudCollecting(true);
         anchorMapper.updateById(anchor);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean releaseCloudTaskIfCurrent(Long sessionId, Long taskId) {
+        LiveSession session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            return false;
+        }
+        if (!session.releaseCloudTaskIfCurrent(taskId)) {
+            return session.getCloudTaskId() == null;
+        }
+        sessionMapper.updateById(session);
+        return true;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -395,6 +418,8 @@ public class LiveDutyService {
         } else if (LiveEvent.TYPE_GIFT.equals(event.getEventType())) {
             wrapper.setSql("gift_count = gift_count + " + positiveSqlValue(event.getGiftCount()))
                 .setSql("gift_value = gift_value + " + positiveSqlValue(event.getGiftValue()));
+        } else if (LiveEvent.TYPE_ROOM_STATS.equals(event.getEventType())) {
+            wrapper.setSql("viewer_count = greatest(viewer_count, " + positiveSqlValue(event.getViewerCount()) + ")");
         } else {
             return;
         }
@@ -432,7 +457,7 @@ public class LiveDutyService {
     }
 
     private void logReceivedEvent(LiveEvent event) {
-        log.info("收到直播事件，source={}, sessionId={}, anchorId={}, roomId={}, liveId={}, type={}, msgId={}, userId={}, douyinAccount={}, nickname={}, content={}, giftId={}, giftName={}, giftCount={}, giftValue={}, likeCount={}, eventTime={}",
+        log.info("收到直播事件，source={}, sessionId={}, anchorId={}, roomId={}, liveId={}, type={}, msgId={}, userId={}, douyinAccount={}, nickname={}, content={}, giftId={}, giftName={}, giftCount={}, giftValue={}, likeCount={}, viewerCount={}, eventTime={}",
             event.getSource(),
             event.getSessionId(),
             event.getAnchorId(),
@@ -449,6 +474,7 @@ public class LiveDutyService {
             event.getGiftCount(),
             event.getGiftValue(),
             event.getLikeCount(),
+            event.getViewerCount(),
             event.getEventTime());
     }
 
@@ -466,11 +492,10 @@ public class LiveDutyService {
             return running;
         }
         String resolvedLiveId = firstText(liveId, anchor.getDouyinLiveId());
-        String resolvedRoomId = firstText(roomId, anchor.getRoomId());
         LiveSession session = LiveSession.start(LiveSession.StartSessionCommand.builder()
             .anchorId(anchor.getId())
             .liveId(resolvedLiveId)
-            .roomId(resolvedRoomId)
+            .roomId(roomId)
             .liveTitle(liveTitle)
             .activeSource(source)
             .build());
@@ -524,9 +549,10 @@ public class LiveDutyService {
 
     private LiveGiftRankVO toGiftRank(LiveUserGiftStat stat) {
         return LiveGiftRankVO.builder()
+            .rankKey(stat.getUserKey())
             .userId(stat.getUserId())
             .douyinAccount(stat.getDouyinAccount())
-            .nickname(firstText(stat.getNickname(), stat.getDouyinAccount(), stat.getUserId(), "未知观众"))
+            .nickname(resolveGiftRankNickname(stat))
             .giftValue(stat.getGiftValue())
             .giftCount(safeLongToInt(stat.getGiftCount()))
             .giftEventCount(safeLongToInt(stat.getGiftEventCount()))
@@ -534,7 +560,22 @@ public class LiveDutyService {
     }
 
     private String buildGiftUserKey(LiveEvent event) {
-        return firstText(event.getUserId(), event.getDouyinAccount(), event.getNickname(), "unknown");
+        String identityKey = firstText(event.getUserId(), event.getDouyinAccount(), event.getNickname());
+        if (StringUtils.hasText(identityKey)) {
+            return identityKey;
+        }
+        // 私密用户不会下发可识别身份，礼物榜按消息或事件隔离，避免多个匿名观众合并成同一个人。
+        if (StringUtils.hasText(event.getMsgId())) {
+            return "anonymous-msg:" + event.getMsgId().trim();
+        }
+        if (event.getId() != null) {
+            return "anonymous-event:" + event.getId();
+        }
+        return "anonymous-session:" + event.getSessionId() + ":" + event.getEventTime();
+    }
+
+    private String resolveGiftRankNickname(LiveUserGiftStat stat) {
+        return firstText(stat.getNickname(), stat.getDouyinAccount(), stat.getUserId(), "未知观众");
     }
 
     private long positiveSqlValue(Long value) {
@@ -562,10 +603,17 @@ public class LiveDutyService {
     }
 
     private LiveAnchor.AnchorProfileCommand toAnchorCommand(LiveAnchorSaveDTO dto) {
+        ResolvedDouyinLiveInput resolvedInput = douyinLiveInputResolver.resolve(dto.getDouyinLiveId());
+        // 主播配置只保存长期稳定的 PC live_id；room_id 属于单场直播，不能落到主播配置里。
+        String liveId = looksLikeDouyinShareInput(dto.getDouyinLiveId())
+            ? firstText(resolvedInput.liveId())
+            : firstText(resolvedInput.liveId(), resolvedInput.canonicalInput(), dto.getDouyinLiveId());
+        if (isCloudCollectEnabled(dto.getCloudCollectEnabled()) && !StringUtils.hasText(liveId)) {
+            throw new BusinessException("启用云端采集时必须填写可解析的抖音 liveId 或直播分享链接");
+        }
         return LiveAnchor.AnchorProfileCommand.builder()
             .anchorName(dto.getAnchorName())
-            .douyinLiveId(dto.getDouyinLiveId())
-            .roomId(dto.getRoomId())
+            .douyinLiveId(liveId)
             .status(dto.getStatus())
             .cloudCollectEnabled(dto.getCloudCollectEnabled())
             .build();
@@ -576,7 +624,6 @@ public class LiveDutyService {
             .id(anchor.getId())
             .anchorName(anchor.getAnchorName())
             .douyinLiveId(anchor.getDouyinLiveId())
-            .roomId(anchor.getRoomId())
             .reportToken(anchor.getReportToken())
             .status(anchor.getStatus())
             .cloudCollectEnabled(anchor.getCloudCollectEnabled())
@@ -633,5 +680,20 @@ public class LiveDutyService {
             }
         }
         return null;
+    }
+
+    private boolean isCloudCollectEnabled(Integer value) {
+        return value == null || Integer.valueOf(LiveAnchor.FLAG_YES).equals(value);
+    }
+
+    private boolean looksLikeDouyinShareInput(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase();
+        return normalized.contains("douyin.com")
+            || normalized.contains("amemv.com")
+            || normalized.contains("抖音")
+            || normalized.length() > 80;
     }
 }

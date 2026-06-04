@@ -13,6 +13,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx768m}
+      LOGGING_FILE_NAME: ${LOGGING_FILE_NAME:-/app/logs/flowlens-admin.log}
       FLOWLENS_DB_URL: ${FLOWLENS_DB_URL:-jdbc:mysql://host.docker.internal:13306/flowlens-platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
       FLOWLENS_DB_USERNAME: ${FLOWLENS_DB_USERNAME:-flowlens}
       FLOWLENS_DB_PASSWORD: ${FLOWLENS_DB_PASSWORD:-flowlens_change_me}
@@ -33,6 +34,7 @@ services:
     ports:
       - "${FLOWLENS_ADMIN_PORT:-8088}:8088"
     volumes:
+      - ${FLOWLENS_LOG_HOST_PATH:-/data/mingus/flowlens/logs}:/app/logs
       - ${FLOWLENS_DOUYIN_FETCHER_HOST_PATH:-/data/mingus/flowlens/DouyinLiveWebFetcher}:/opt/DouyinLiveWebFetcher:ro
       - /data/mingus/flowlens/logs:/app/logs
     networks:

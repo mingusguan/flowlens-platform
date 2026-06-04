@@ -44,6 +44,8 @@ public class LiveEventReportDTO {
 
     private Long likeCount;
 
+    private Long viewerCount;
+
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime eventTime;
 

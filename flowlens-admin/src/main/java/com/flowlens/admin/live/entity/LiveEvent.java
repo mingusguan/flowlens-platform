@@ -48,6 +48,8 @@ public class LiveEvent {
 
     private Long likeCount;
 
+    private Long viewerCount;
+
     private LocalDateTime eventTime;
 
     private LocalDateTime createTime;
@@ -63,6 +65,8 @@ public class LiveEvent {
     public static final String TYPE_MEMBER = "MEMBER";
 
     public static final String TYPE_FOLLOW = "FOLLOW";
+
+    public static final String TYPE_ROOM_STATS = "ROOM_STATS";
 
     public static final String SOURCE_CLIENT = "CLIENT";
 
@@ -90,6 +94,7 @@ public class LiveEvent {
         event.giftCount = dto.getGiftCount() == null ? 0 : Math.max(dto.getGiftCount(), 0);
         event.giftValue = dto.getGiftValue() == null ? 0L : Math.max(dto.getGiftValue(), 0L);
         event.likeCount = dto.getLikeCount() == null ? 0L : Math.max(dto.getLikeCount(), 0L);
+        event.viewerCount = dto.getViewerCount() == null ? 0L : Math.max(dto.getViewerCount(), 0L);
         event.eventTime = dto.getEventTime() == null ? firstTime(defaultEventTime, LocalDateTime.now()) : dto.getEventTime();
         event.createTime = LocalDateTime.now();
         return event;
@@ -109,7 +114,8 @@ public class LiveEvent {
             && !TYPE_LIKE.equals(normalized)
             && !TYPE_LIVE_END.equals(normalized)
             && !TYPE_MEMBER.equals(normalized)
-            && !TYPE_FOLLOW.equals(normalized)) {
+            && !TYPE_FOLLOW.equals(normalized)
+            && !TYPE_ROOM_STATS.equals(normalized)) {
             throw new BusinessException("事件类型不支持");
         }
         return normalized;

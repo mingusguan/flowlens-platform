@@ -13,8 +13,6 @@ public class LiveAnchorSaveDTO {
 
     private String douyinLiveId;
 
-    private String roomId;
-
     private Integer status;
 
     private Integer cloudCollectEnabled;

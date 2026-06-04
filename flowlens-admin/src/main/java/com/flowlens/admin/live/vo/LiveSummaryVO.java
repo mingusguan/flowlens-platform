@@ -33,5 +33,7 @@ public class LiveSummaryVO {
 
     private Long giftValue;
 
+    private Long viewerCount;
+
     private List<LiveGiftRankVO> giftRank;
 }

@@ -25,6 +25,8 @@ public class LiveSessionStat {
 
     private Long giftValue;
 
+    private Long viewerCount;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
@@ -38,6 +40,7 @@ public class LiveSessionStat {
         stat.likeCount = LiveEvent.TYPE_LIKE.equals(event.getEventType()) ? positive(event.getLikeCount()) : 0L;
         stat.giftCount = LiveEvent.TYPE_GIFT.equals(event.getEventType()) ? positive(event.getGiftCount()) : 0L;
         stat.giftValue = LiveEvent.TYPE_GIFT.equals(event.getEventType()) ? positive(event.getGiftValue()) : 0L;
+        stat.viewerCount = LiveEvent.TYPE_ROOM_STATS.equals(event.getEventType()) ? positive(event.getViewerCount()) : 0L;
         stat.createTime = now;
         stat.updateTime = now;
         return stat;

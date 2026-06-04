@@ -21,8 +21,6 @@ public class LiveAnchor {
 
     private String douyinLiveId;
 
-    private String roomId;
-
     private String reportToken;
 
     private Integer status;
@@ -106,7 +104,6 @@ public class LiveAnchor {
     private void applyProfile(AnchorProfileCommand command) {
         this.anchorName = requireText(command.getAnchorName(), "主播名称不能为空");
         this.douyinLiveId = cleanNullable(command.getDouyinLiveId());
-        this.roomId = cleanNullable(command.getRoomId());
         this.status = normalizeStatus(command.getStatus());
         this.cloudCollectEnabled = normalizeFlag(command.getCloudCollectEnabled(), FLAG_YES, "云端兜底采集开关不合法");
     }
@@ -149,8 +146,6 @@ public class LiveAnchor {
         private String anchorName;
 
         private String douyinLiveId;
-
-        private String roomId;
 
         private Integer status;
 

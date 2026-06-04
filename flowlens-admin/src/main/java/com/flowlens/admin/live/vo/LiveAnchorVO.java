@@ -14,8 +14,6 @@ public class LiveAnchorVO {
 
     private String douyinLiveId;
 
-    private String roomId;
-
     private String reportToken;
 
     private Integer status;

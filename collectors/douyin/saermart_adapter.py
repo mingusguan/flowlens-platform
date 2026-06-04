@@ -31,17 +31,42 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
+import unicodedata
+import urllib.parse
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 
 LOG = logging.getLogger("flowlens.saermart_adapter")
+
+HTTP_URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+LIVE_URL_PATTERN = re.compile(r"live\.douyin\.com/(\d+)", re.IGNORECASE)
+REFLOW_URL_PATTERN = re.compile(r"/(?:douyin/)?webcast/reflow/(\d+)", re.IGNORECASE)
+NUMBER_PATTERN = re.compile(r"^\d{6,}$")
+REFLOW_ROOM_ID_MIN_LENGTH = 16
+DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0"
+)
+UNSAFE_TEXT_CHARS = {"\ufffc", "\ufffd"}
+
+
+@dataclass(frozen=True)
+class ResolvedLiveInput:
+    live_id: str | None = None
+    room_id: str | None = None
+    live_title: str | None = None
+    room_status: int | None = None
+    live: bool | None = None
+    source: str | None = None
 
 
 class EventReporter:
@@ -85,6 +110,20 @@ def scalar(value: Any, default: Any = None) -> Any:
     if isinstance(value, (str, int, float, bool)):
         return value
     return default
+
+
+def clean_event_text(value: Any, default: str | None = None) -> str | None:
+    if value is None:
+        return default
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    chars: list[str] = []
+    for char in text:
+        if char in UNSAFE_TEXT_CHARS or unicodedata.category(char).startswith("C"):
+            chars.append(" ")
+            continue
+        chars.append(char)
+    cleaned = " ".join("".join(chars).split())
+    return cleaned or default
 
 
 def nested(obj: Any, *names: str, default: Any = None) -> Any:
@@ -131,6 +170,161 @@ def as_jsonable(obj: Any) -> str:
         return json.dumps(obj, default=lambda item: getattr(item, "__dict__", str(item)), ensure_ascii=False)
     except TypeError:
         return str(obj)
+
+
+def extract_candidate(value: str | None) -> str | None:
+    if not value:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    match = HTTP_URL_PATTERN.search(trimmed)
+    if match:
+        return strip_url_tail(match.group(0))
+    return trimmed
+
+
+def strip_url_tail(value: str) -> str:
+    cleaned = value.strip()
+    while cleaned and cleaned[-1] in "。，,)）]】\"'":
+        cleaned = cleaned[:-1]
+    return cleaned
+
+
+def is_douyin_url(value: str) -> bool:
+    try:
+        host = (urllib.parse.urlparse(value).hostname or "").lower()
+    except ValueError:
+        return False
+    return host.endswith("douyin.com") or host.endswith("amemv.com")
+
+
+def resolve_redirect_url(url: str) -> str | None:
+    request = urllib.request.Request(url, headers={"User-Agent": DESKTOP_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return response.geturl()
+    except urllib.error.URLError as exc:
+        LOG.warning("resolve douyin redirect failed url=%s error=%s", url, exc)
+        return None
+
+
+def json_get(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def text_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def first_text(*values: Any) -> str | None:
+    for value in values:
+        text = text_or_none(value)
+        if text:
+            return text
+    return None
+
+
+def has_stream_url(room: dict[str, Any]) -> bool:
+    stream_url = room.get("stream_url")
+    if not isinstance(stream_url, dict):
+        return False
+    return bool(
+        stream_url.get("rtmp_pull_url")
+        or stream_url.get("hls_pull_url")
+        or stream_url.get("flv_pull_url")
+    )
+
+
+def resolve_reflow_room(room_id: str) -> ResolvedLiveInput:
+    url = (
+        "https://webcast.amemv.com/webcast/room/reflow/info/"
+        f"?type_id=0&live_id=1&room_id={urllib.parse.quote(room_id)}&app_id=1128"
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": DESKTOP_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        LOG.warning("resolve reflow room failed room_id=%s error=%s", room_id, exc)
+        return ResolvedLiveInput(room_id=room_id, source="reflow")
+
+    room = json_get(data, "data", "room")
+    if not isinstance(room, dict):
+        return ResolvedLiveInput(room_id=room_id, source="reflow")
+
+    resolved_room_id = first_text(room.get("id_str"), room.get("id"), room_id)
+    live_id = first_text(json_get(room, "owner", "web_rid"))
+    live_title = first_text(room.get("title"))
+    room_status = int_or_none(room.get("status"))
+    live = has_stream_url(room)
+    LOG.info(
+        "resolved reflow room room_id=%s live_id=%s room_status=%s live=%s title=%s",
+        resolved_room_id,
+        live_id,
+        room_status,
+        live,
+        live_title,
+    )
+    return ResolvedLiveInput(
+        live_id=live_id,
+        room_id=resolved_room_id,
+        live_title=live_title,
+        room_status=room_status,
+        live=live,
+        source="reflow",
+    )
+
+
+def resolve_live_input(live_id: str | None, room_id: str | None) -> ResolvedLiveInput:
+    candidate = extract_candidate(live_id) or extract_candidate(room_id)
+    cleaned_room_id = extract_candidate(room_id)
+    if candidate:
+        match = LIVE_URL_PATTERN.search(candidate)
+        if match:
+            return ResolvedLiveInput(live_id=match.group(1), room_id=cleaned_room_id, source="pc_live")
+        match = REFLOW_URL_PATTERN.search(candidate)
+        if match:
+            return resolve_reflow_room(match.group(1))
+        if NUMBER_PATTERN.match(candidate):
+            if len(candidate) >= REFLOW_ROOM_ID_MIN_LENGTH:
+                return resolve_reflow_room(candidate)
+            return ResolvedLiveInput(live_id=candidate, room_id=cleaned_room_id, source="live_id")
+        if is_douyin_url(candidate):
+            redirected = resolve_redirect_url(candidate)
+            if redirected and redirected != candidate:
+                return resolve_live_input(redirected, room_id)
+    if cleaned_room_id and NUMBER_PATTERN.match(cleaned_room_id) and len(cleaned_room_id) >= REFLOW_ROOM_ID_MIN_LENGTH:
+        return resolve_reflow_room(cleaned_room_id)
+    return ResolvedLiveInput(live_id=candidate, room_id=cleaned_room_id, source="raw")
+
+
+def merge_resolved_inputs(primary: ResolvedLiveInput, fallback: ResolvedLiveInput) -> ResolvedLiveInput:
+    source = primary.source
+    if primary.live is None and fallback.live is not None:
+        source = fallback.source
+    return ResolvedLiveInput(
+        live_id=first_text(primary.live_id, fallback.live_id),
+        room_id=first_text(primary.room_id, fallback.room_id),
+        live_title=first_text(primary.live_title, fallback.live_title),
+        room_status=primary.room_status if primary.room_status is not None else fallback.room_status,
+        live=primary.live if primary.live is not None else fallback.live,
+        source=first_text(source, fallback.source),
+    )
+
+
+def resolve_effective_live_input(live_id: str | None, room_id: str | None) -> ResolvedLiveInput:
+    live_result = resolve_live_input(live_id, room_id)
+    room_result = resolve_live_input(None, room_id) if room_id else ResolvedLiveInput()
+    return merge_resolved_inputs(live_result, room_result)
 
 
 def build_fetcher_class(fetcher_path: Path):
@@ -202,7 +396,7 @@ def response_json(response: Any) -> dict[str, Any]:
 def probe_room(fetcher: Any, douyin_module: Any) -> dict[str, Any]:
     room_id = resolve_room_id(fetcher)
     if not room_id:
-        return {"live": False, "roomStatus": None, "roomId": None, "error": "room_id_not_found"}
+        return {"live": False, "roomStatus": None, "liveId": str(fetcher.live_id), "roomId": None, "error": "room_id_not_found"}
 
     last_error: Exception | None = None
     for attempt in range(1, 4):
@@ -216,6 +410,7 @@ def probe_room(fetcher: Any, douyin_module: Any) -> dict[str, Any]:
     return {
         "live": False,
         "roomStatus": None,
+        "liveId": str(fetcher.live_id),
         "roomId": str(room_id),
         "error": "probe_failed",
         "message": compact_text(str(last_error or "")),
@@ -257,11 +452,36 @@ def probe_room_once(fetcher: Any, douyin_module: Any, room_id: str) -> dict[str,
     return {
         "live": room_status == 0,
         "roomStatus": room_status,
+        "liveId": str(fetcher.live_id),
         "roomId": str(room_id),
         "userId": scalar(user.get("id_str"), None) or scalar(user.get("id"), None),
         "nickname": scalar(user.get("nickname"), None),
         "liveTitle": scalar(data.get("title"), None) or scalar(room.get("title"), None),
     }
+
+
+def reflow_probe_result(resolved: ResolvedLiveInput, error: str | None = None) -> dict[str, Any]:
+    return {
+        "live": bool(resolved.live),
+        "roomStatus": resolved.room_status,
+        "liveId": resolved.live_id,
+        "roomId": resolved.room_id,
+        "liveTitle": resolved.live_title,
+        "error": error,
+    }
+
+
+def merge_probe_result(result: dict[str, Any], resolved: ResolvedLiveInput) -> dict[str, Any]:
+    merged = result.copy()
+    if not merged.get("liveId") and resolved.live_id:
+        merged["liveId"] = resolved.live_id
+    if not merged.get("roomId") and resolved.room_id:
+        merged["roomId"] = resolved.room_id
+    if not merged.get("liveTitle") and resolved.live_title:
+        merged["liveTitle"] = resolved.live_title
+    if merged.get("roomStatus") is None and resolved.room_status is not None:
+        merged["roomStatus"] = resolved.room_status
+    return merged
 
 
 def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: EventReporter):
@@ -275,8 +495,8 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "msgId": msg_id(message),
                 "userId": user_id(user),
                 "douyinAccount": douyin_account(user),
-                "nickname": nickname(user),
-                "content": scalar(getattr(message, "content", None), ""),
+                "nickname": clean_event_text(nickname(user)),
+                "content": clean_event_text(scalar(getattr(message, "content", None), ""), "") or "",
                 "eventTime": iso_now(),
                 "rawPayload": as_jsonable(message),
             })
@@ -303,9 +523,9 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "msgId": msg_id(message),
                 "userId": user_id(user),
                 "douyinAccount": douyin_account(user),
-                "nickname": nickname(user),
+                "nickname": clean_event_text(nickname(user)),
                 "giftId": str(scalar(getattr(gift, "id", None), "")) or None,
-                "giftName": scalar(getattr(gift, "name", None), None),
+                "giftName": clean_event_text(scalar(getattr(gift, "name", None), None)),
                 "giftCount": int(gift_count),
                 "giftValue": int(gift_value) * int(gift_count or 1),
                 "eventTime": iso_now(),
@@ -322,8 +542,25 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "msgId": msg_id(message),
                 "userId": user_id(user),
                 "douyinAccount": douyin_account(user),
-                "nickname": nickname(user),
+                "nickname": clean_event_text(nickname(user)),
                 "likeCount": int(like_count),
+                "eventTime": iso_now(),
+                "rawPayload": as_jsonable(message),
+            })
+
+        def _parseRoomUserSeqMsg(self, payload: Any) -> None:  # noqa: N802
+            message = douyin_module.RoomUserSeqMessage().parse(payload)
+            super()._parseRoomUserSeqMsg(payload)
+            viewer_count = (
+                int_or_none(getattr(message, "total_pv_for_anchor", None))
+                or int_or_none(getattr(message, "total_user", None))
+                or int_or_none(getattr(message, "total", None))
+                or 0
+            )
+            reporter.post_event({
+                "eventType": "ROOM_STATS",
+                "msgId": msg_id(message),
+                "viewerCount": int(viewer_count),
                 "eventTime": iso_now(),
                 "rawPayload": as_jsonable(message),
             })
@@ -350,10 +587,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend-url", default=None, help="FlowLens backend base URL, for example http://127.0.0.1:8088")
     parser.add_argument("--anchor-id", default=None, type=int)
     parser.add_argument("--token", default=None, help="Anchor report token generated by FlowLens")
-    parser.add_argument("--live-id", required=True, help="Douyin live_id, usually the URL suffix")
+    parser.add_argument("--live-id", default=None, help="Douyin live_id, PC URL, mobile share text, or v.douyin.com link")
     parser.add_argument("--room-id", default=None)
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
+    if not args.live_id and not args.room_id:
+        parser.error("requires at least one of: --live-id, --room-id")
     if not args.probe:
         missing = [
             name
@@ -374,17 +613,51 @@ def main() -> int:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
     base_class, douyin_module = build_fetcher_class(Path(args.fetcher_path).resolve())
     os.chdir(Path(args.fetcher_path).resolve())
+    resolved_input = resolve_effective_live_input(args.live_id, args.room_id)
+    live_id = first_text(resolved_input.live_id, args.live_id)
+    room_id = first_text(resolved_input.room_id, args.room_id)
+    LOG.info(
+        "resolved live input source=%s live_id=%s room_id=%s room_status=%s live=%s",
+        resolved_input.source,
+        live_id,
+        room_id,
+        resolved_input.room_status,
+        resolved_input.live,
+    )
     if args.probe:
-        room = base_class(args.live_id)
-        set_fetcher_room_id(room, args.room_id)
+        if resolved_input.source == "reflow" and resolved_input.live is False:
+            print(json.dumps(reflow_probe_result(resolved_input), ensure_ascii=False), flush=True)
+            return 0
+        if not live_id:
+            print(json.dumps(reflow_probe_result(resolved_input, "live_id_not_found"), ensure_ascii=False), flush=True)
+            return 0
+        room = base_class(live_id)
+        set_fetcher_room_id(room, room_id)
         apply_session_timeout(room)
         result = probe_room(room, douyin_module)
+        reflow_result = None
+        if result.get("roomId") and not result.get("liveTitle"):
+            reflow_result = resolve_reflow_room(str(result["roomId"]))
+            result = merge_probe_result(result, reflow_result)
+        if not result.get("live") and resolved_input.source == "reflow" and resolved_input.live is True:
+            result = reflow_probe_result(resolved_input, result.get("error") or "pc_probe_failed")
+        elif not result.get("live") and reflow_result is not None and reflow_result.live is True:
+            result = reflow_probe_result(reflow_result, result.get("error") or "pc_probe_failed")
+        else:
+            result = merge_probe_result(result, resolved_input)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0
 
-    reporter = EventReporter(args.backend_url, args.anchor_id, args.token, args.live_id, args.room_id)
+    if not live_id:
+        LOG.error("live_id cannot be resolved from input live_id=%s room_id=%s", args.live_id, args.room_id)
+        return 1
+    if not room_id:
+        resolved_for_room = resolve_live_input(live_id, None)
+        room_id = first_text(resolved_for_room.room_id, room_id)
+    reporter = EventReporter(args.backend_url, args.anchor_id, args.token, live_id, room_id)
     fetcher_class = make_reporting_fetcher(base_class, douyin_module, reporter)
-    room = fetcher_class(args.live_id)
+    room = fetcher_class(live_id)
+    set_fetcher_room_id(room, room_id)
 
     should_stop = False
 
@@ -398,7 +671,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    LOG.info("starting cloud collector anchor_id=%s live_id=%s", args.anchor_id, args.live_id)
+    LOG.info("starting cloud collector anchor_id=%s live_id=%s room_id=%s", args.anchor_id, live_id, room_id)
     try:
         room.start()
         while not should_stop:

@@ -85,7 +85,7 @@ alter table live_event
     modify column room_id varchar(80) comment '房间ID',
     modify column live_id varchar(80) comment '直播间ID',
     modify column msg_id varchar(120) comment '平台消息ID',
-    modify column event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注',
+    modify column event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注，ROOM_STATS直播间统计',
     modify column source varchar(24) not null comment '事件来源：CLIENT客户端，CLOUD云端',
     modify column user_id varchar(80) comment '观众用户ID',
     modify column douyin_account varchar(120) comment '观众可搜索的抖音号',
@@ -96,6 +96,7 @@ alter table live_event
     modify column gift_count int not null default 0 comment '礼物数量',
     modify column gift_value bigint not null default 0 comment '礼物价值',
     modify column like_count bigint not null default 0 comment '点赞数量',
+    modify column viewer_count bigint not null default 0 comment '累计观看人数快照',
     modify column event_time datetime not null comment '事件发生时间',
     modify column create_time datetime not null default current_timestamp comment '创建时间',
     comment='直播事件表';
@@ -117,6 +118,7 @@ alter table live_session_stat
     modify column like_count bigint not null default 0 comment '累计点赞数量',
     modify column gift_count bigint not null default 0 comment '累计礼物数量',
     modify column gift_value bigint not null default 0 comment '累计礼物价值',
+    modify column viewer_count bigint not null default 0 comment '累计观看人数',
     modify column create_time datetime not null default current_timestamp comment '创建时间',
     modify column update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
     comment='直播场次统计表';
@@ -125,7 +127,7 @@ alter table live_user_gift_stat
     modify column id bigint not null auto_increment comment '直播用户礼物统计ID',
     modify column session_id bigint not null comment '直播场次ID',
     modify column anchor_id bigint not null comment '主播ID',
-    modify column user_key varchar(160) not null comment '观众聚合键，优先使用用户ID，其次抖音号或昵称',
+    modify column user_key varchar(160) not null comment '观众聚合键，优先用户身份，私密用户按消息或事件隔离',
     modify column user_id varchar(80) comment '观众用户ID',
     modify column douyin_account varchar(120) comment '观众可搜索的抖音号',
     modify column nickname varchar(120) comment '观众昵称',

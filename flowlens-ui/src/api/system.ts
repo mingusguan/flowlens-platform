@@ -65,7 +65,6 @@ export interface LiveAnchorItem {
   id?: number
   anchorName: string
   douyinLiveId?: string
-  roomId?: string
   reportToken?: string
   status: number
   cloudCollectEnabled: number
@@ -92,6 +91,7 @@ export interface LiveSessionItem {
 }
 
 export interface LiveGiftRankItem {
+  rankKey?: string
   userId?: string
   douyinAccount?: string
   nickname: string
@@ -113,6 +113,7 @@ export interface LiveSummary {
   likeCount: number
   giftCount: number
   giftValue: number
+  viewerCount: number
   giftRank: LiveGiftRankItem[]
 }
 

@@ -86,6 +86,32 @@ public class LiveSession {
         this.updateTime = LocalDateTime.now();
     }
 
+    public boolean releaseCloudTaskIfCurrent(Long taskId) {
+        if (taskId == null || cloudTaskId == null || !cloudTaskId.equals(taskId)) {
+            return false;
+        }
+        this.cloudTaskId = null;
+        if (SOURCE_CLOUD.equals(activeSource)) {
+            this.activeSource = SOURCE_NONE;
+        }
+        this.updateTime = LocalDateTime.now();
+        return true;
+    }
+
+    public void fillProbeInfo(String liveId, String roomId, String liveTitle) {
+        if (StringUtils.hasText(liveId) && !StringUtils.hasText(this.liveId)) {
+            this.liveId = liveId.trim();
+        }
+        if (StringUtils.hasText(roomId) && !StringUtils.hasText(this.roomId)) {
+            this.roomId = roomId.trim();
+        }
+        if (StringUtils.hasText(liveTitle) && !StringUtils.hasText(this.liveTitle)) {
+            this.liveTitle = liveTitle.trim();
+        }
+        this.updateTime = LocalDateTime.now();
+    }
+
+
     public void end() {
         if (STATUS_ENDED.equals(status)) {
             return;

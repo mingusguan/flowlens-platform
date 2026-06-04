@@ -8,6 +8,13 @@ on:
       - master
     tags:
       - 'v*'
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'pom.xml'
+      - 'flowlens-admin/**'
+      - 'collectors/douyin/saermart_adapter.py'
+      - '.github/workflows/build-image.yml'
 
 env:
   IMAGE_REGISTRY: registry.cn-hangzhou.aliyuncs.com

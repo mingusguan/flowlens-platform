@@ -5,11 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.flowlens.admin.live.entity.LiveAnchor;
 import com.flowlens.admin.live.entity.LiveCollectorTask;
 import com.flowlens.admin.live.entity.LiveSession;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
@@ -74,32 +77,32 @@ public class LiveCloudCollectorService {
             liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
             return;
         }
-        if (liveDutyService.findRunningCollectorTask(session.getId()) == null) {
+        if (findAliveRunningCollectorTask(session, anchor) == null) {
             startCloudCollector(session, anchor);
         }
     }
 
     private void probeAnchor(LiveAnchor anchor) {
         if (liveDutyService.hasRunningSession(anchor.getId())) {
-            log.info("云端开播探测跳过，主播已有直播场次，anchorId={}, liveId={}, roomId={}",
-                anchor.getId(), anchor.getDouyinLiveId(), anchor.getRoomId());
+            log.info("云端开播探测跳过，主播已有直播场次，anchorId={}, liveId={}",
+                anchor.getId(), anchor.getDouyinLiveId());
             return;
         }
         if (anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())) {
-            log.info("云端开播探测跳过，客户端仍在线，anchorId={}, liveId={}, roomId={}",
-                anchor.getId(), anchor.getDouyinLiveId(), anchor.getRoomId());
+            log.info("云端开播探测跳过，客户端仍在线，anchorId={}, liveId={}",
+                anchor.getId(), anchor.getDouyinLiveId());
             return;
         }
-        log.info("云端开播探测主播，anchorId={}, anchorName={}, liveId={}, roomId={}",
-            anchor.getId(), anchor.getAnchorName(), anchor.getDouyinLiveId(), anchor.getRoomId());
+        log.info("云端开播探测主播，anchorId={}, anchorName={}, liveId={}",
+            anchor.getId(), anchor.getAnchorName(), anchor.getDouyinLiveId());
         CloudProbeResult result = runCloudProbe(anchor);
-        log.info("云端开播探测结果，anchorId={}, live={}, roomStatus={}, roomId={}, liveTitle={}, error={}",
-            anchor.getId(), result.live(), result.roomStatus(), result.roomId(), result.liveTitle(), result.error());
+        log.info("云端开播探测结果，anchorId={}, live={}, roomStatus={}, liveId={}, roomId={}, liveTitle={}, error={}",
+            anchor.getId(), result.live(), result.roomStatus(), result.liveId(), result.roomId(), result.liveTitle(), result.error());
         if (!result.live()) {
             return;
         }
         // Probe creates the session first; reconciliation then starts cloud collection.
-        LiveSession session = liveDutyService.startCloudDetectedSession(anchor, result.roomId(), result.liveTitle());
+        LiveSession session = liveDutyService.startCloudDetectedSession(anchor, result.liveId(), result.roomId(), result.liveTitle());
         log.info("云端探测到主播开播，anchorId={}, sessionId={}, roomId={}", anchor.getId(), session.getId(), session.getRoomId());
         reconcileSession(session);
     }
@@ -112,19 +115,112 @@ public class LiveCloudCollectorService {
         }
         LiveCollectorTask task = LiveCollectorTask.starting(session, commandLine);
         liveDutyService.saveCollectorTask(task);
+        Process process = null;
         try {
-            Process process = new ProcessBuilder(buildCommand(session, anchor))
+            process = new ProcessBuilder(buildCommand(session, anchor))
                 .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
             task.markRunning(process.pid());
             liveDutyService.saveCollectorTask(task);
             liveDutyService.bindCloudTask(session, task);
+            log.info("启动云端采集成功，sessionId={}, taskId={}, anchorId={}, processId={}, liveId={}, roomId={}",
+                session.getId(), task.getId(), anchor.getId(), task.getProcessId(), task.getLiveId(), task.getRoomId());
+            monitorCloudCollectorOutput(process, task);
         } catch (IOException ex) {
             log.warn("启动云端采集失败，sessionId={}, command={}", session.getId(), commandLine, ex);
             task.markFailed(ex.getMessage());
             liveDutyService.saveCollectorTask(task);
+        } catch (RuntimeException ex) {
+            if (process != null && process.isAlive()) {
+                process.destroy();
+            }
+            log.warn("绑定云端采集任务失败，sessionId={}, taskId={}, command={}", session.getId(), task.getId(), commandLine, ex);
+            task.markFailed(ex.getMessage());
+            liveDutyService.saveCollectorTask(task);
+            if (liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId())) {
+                liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
+            }
         }
+    }
+
+    private LiveCollectorTask findAliveRunningCollectorTask(LiveSession session, LiveAnchor anchor) {
+        List<LiveCollectorTask> tasks = liveDutyService.listRunningCollectorTasks(session.getId());
+        if (tasks.isEmpty()) {
+            return null;
+        }
+        LiveCollectorTask aliveTask = null;
+        for (LiveCollectorTask task : tasks) {
+            if (task.getProcessId() == null) {
+                markCollectorTaskNotAlive(session, anchor, task, "process id missing");
+                continue;
+            }
+            boolean alive = ProcessHandle.of(task.getProcessId())
+                .map(ProcessHandle::isAlive)
+                .orElse(false);
+            if (!alive) {
+                markCollectorTaskNotAlive(session, anchor, task, "process not alive");
+                continue;
+            }
+            if (aliveTask == null) {
+                aliveTask = task;
+                continue;
+            }
+            ProcessHandle.of(task.getProcessId()).ifPresent(ProcessHandle::destroy);
+            task.markStopped("duplicate collector");
+            liveDutyService.saveCollectorTask(task);
+            liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId());
+            log.warn("停止重复云端采集进程，sessionId={}, taskId={}, processId={}",
+                session.getId(), task.getId(), task.getProcessId());
+        }
+        if (aliveTask == null) {
+            return null;
+        }
+        if (!Objects.equals(session.getCloudTaskId(), aliveTask.getId())) {
+            liveDutyService.bindCloudTask(session, aliveTask);
+            log.info("补齐云端采集任务绑定，sessionId={}, taskId={}, anchorId={}, processId={}",
+                session.getId(), aliveTask.getId(), anchor.getId(), aliveTask.getProcessId());
+        }
+        return aliveTask;
+    }
+
+    private void markCollectorTaskNotAlive(LiveSession session, LiveAnchor anchor, LiveCollectorTask task, String reason) {
+        task.markFailed(reason);
+        liveDutyService.saveCollectorTask(task);
+        if (liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId())) {
+            liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
+        }
+        log.warn("云端采集进程已退出，准备重新启动，sessionId={}, taskId={}, processId={}",
+            session.getId(), task.getId(), task.getProcessId());
+    }
+
+    private void monitorCloudCollectorOutput(Process process, LiveCollectorTask task) {
+        CompletableFuture.runAsync(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (StringUtils.hasText(line)) {
+                        log.info("云端采集输出，taskId={}, sessionId={}, anchorId={}, output={}",
+                            task.getId(), task.getSessionId(), task.getAnchorId(), trimOutput(line));
+                    }
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0) {
+                    task.markStopped("process exited with code 0");
+                } else {
+                    task.markFailed("process exited with code " + exitCode);
+                }
+                liveDutyService.saveCollectorTask(task);
+                if (liveDutyService.releaseCloudTaskIfCurrent(task.getSessionId(), task.getId())) {
+                    liveDutyService.markAnchorCloudCollecting(task.getAnchorId(), false);
+                }
+                log.warn("云端采集进程退出，taskId={}, sessionId={}, anchorId={}, processId={}, exitCode={}",
+                    task.getId(), task.getSessionId(), task.getAnchorId(), task.getProcessId(), exitCode);
+            } catch (IOException ex) {
+                log.warn("读取云端采集输出失败，taskId={}, sessionId={}", task.getId(), task.getSessionId(), ex);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        });
     }
 
     private void stopCloudCollectors(LiveSession session, String reason) {
@@ -138,6 +234,7 @@ public class LiveCloudCollectorService {
             }
             task.markStopped(reason);
             liveDutyService.saveCollectorTask(task);
+            liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId());
         });
     }
 
@@ -203,6 +300,7 @@ public class LiveCloudCollectorService {
         return new CloudProbeResult(
             result.path("live").asBoolean(false),
             result.path("roomStatus").isMissingNode() || result.path("roomStatus").isNull() ? null : result.path("roomStatus").asInt(),
+            textOrNull(result.path("liveId")),
             textOrNull(result.path("roomId")),
             textOrNull(result.path("liveTitle")),
             textOrNull(result.path("error"))
@@ -268,11 +366,13 @@ public class LiveCloudCollectorService {
     }
 
     private String renderToken(String value, LiveSession session, LiveAnchor anchor) {
+        String liveId = session == null ? anchor.getDouyinLiveId() : firstText(session.getLiveId(), anchor.getDouyinLiveId());
+        String roomId = session == null ? null : session.getRoomId();
         return value
             .replace("{anchorId}", String.valueOf(anchor.getId()))
             .replace("{reportToken}", nullToEmpty(anchor.getReportToken()))
-            .replace("{liveId}", nullToEmpty(session == null ? anchor.getDouyinLiveId() : session.getLiveId()))
-            .replace("{roomId}", nullToEmpty(session == null ? anchor.getRoomId() : session.getRoomId()))
+            .replace("{liveId}", nullToEmpty(liveId))
+            .replace("{roomId}", nullToEmpty(roomId))
             .replace("{sessionId}", session == null ? "" : String.valueOf(session.getId()));
     }
 
@@ -296,10 +396,19 @@ public class LiveCloudCollectorService {
         return value == null ? "" : value;
     }
 
-    private record CloudProbeResult(boolean live, Integer roomStatus, String roomId, String liveTitle, String error) {
+    private String firstText(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private record CloudProbeResult(boolean live, Integer roomStatus, String liveId, String roomId, String liveTitle, String error) {
 
         private static CloudProbeResult notLive(String error) {
-            return new CloudProbeResult(false, null, null, null, error);
+            return new CloudProbeResult(false, null, null, null, null, error);
         }
     }
 }
