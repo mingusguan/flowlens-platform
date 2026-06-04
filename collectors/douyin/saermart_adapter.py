@@ -244,10 +244,20 @@ def has_stream_url(room: dict[str, Any]) -> bool:
     )
 
 
-def live_from_room_status(room_status: int | None) -> bool | None:
+def live_from_pc_room_status(room_status: int | None) -> bool | None:
     if room_status is None:
         return None
     return room_status == 0
+
+
+def live_from_reflow_room_status(room_status: int | None) -> bool | None:
+    if room_status is None:
+        return None
+    if room_status == 2:
+        return True
+    if room_status == 4:
+        return False
+    return None
 
 
 def resolve_reflow_room(room_id: str) -> ResolvedLiveInput:
@@ -272,7 +282,7 @@ def resolve_reflow_room(room_id: str) -> ResolvedLiveInput:
     live_title = first_text(room.get("title"))
     room_status = int_or_none(room.get("status"))
     stream_available = has_stream_url(room)
-    live = live_from_room_status(room_status)
+    live = live_from_reflow_room_status(room_status)
     LOG.info(
         "resolved reflow room room_id=%s live_id=%s room_status=%s live=%s stream_available=%s title=%s",
         resolved_room_id,
@@ -458,8 +468,9 @@ def probe_room_once(fetcher: Any, douyin_module: Any, room_id: str) -> dict[str,
     user = data.get("user") or {}
     room_status = int_or_none(data.get("room_status"))
     return {
-        "live": room_status == 0,
+        "live": live_from_pc_room_status(room_status) is True,
         "roomStatus": room_status,
+        "statusSource": "pc",
         "liveId": str(fetcher.live_id),
         "roomId": str(room_id),
         "userId": scalar(user.get("id_str"), None) or scalar(user.get("id"), None),
@@ -469,9 +480,12 @@ def probe_room_once(fetcher: Any, douyin_module: Any, room_id: str) -> dict[str,
 
 
 def reflow_probe_result(resolved: ResolvedLiveInput, error: str | None = None) -> dict[str, Any]:
+    raw_room_status = resolved.room_status
     return {
         "live": bool(resolved.live),
-        "roomStatus": resolved.room_status,
+        "roomStatus": 0 if resolved.live is True else raw_room_status,
+        "rawRoomStatus": raw_room_status,
+        "statusSource": resolved.source,
         "liveId": resolved.live_id,
         "roomId": resolved.room_id,
         "liveTitle": resolved.live_title,
@@ -489,6 +503,8 @@ def merge_probe_result(result: dict[str, Any], resolved: ResolvedLiveInput) -> d
         merged["liveTitle"] = resolved.live_title
     if merged.get("roomStatus") is None and resolved.room_status is not None:
         merged["roomStatus"] = resolved.room_status
+        merged["rawRoomStatus"] = resolved.room_status
+        merged["statusSource"] = resolved.source
     return merged
 
 
