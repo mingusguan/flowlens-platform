@@ -1,6 +1,6 @@
 services:
   flowlens-admin:
-    image: ${FLOWLENS_IMAGE_REPOSITORY:-registry.cn-hangzhou.aliyuncs.com/your-namespace/flowlens-admin}:${FLOWLENS_IMAGE_TAG:-latest}
+    image: ${FLOWLENS_IMAGE_REPOSITORY:-registry.cn-hangzhou.aliyuncs.com/mingus/flowlens-platform}:${FLOWLENS_IMAGE_TAG:-latest}
     container_name: flowlens-admin
     restart: unless-stopped
     extra_hosts:
