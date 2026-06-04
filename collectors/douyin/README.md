@@ -50,9 +50,9 @@ The Java scheduler uses this to auto-create a live session before starting the c
 ## Local gift announcer
 
 `local_gift_announcer.py` is a standalone local client for on-site gift voice announcements.
-It listens for Douyin gift messages, can optionally announce chat comments, and plays speech
-on the local machine. It does not send heartbeats, gift events, comments, or any other data to
-the FlowLens backend.
+It listens for Douyin gift messages, can optionally announce chat comments, member enter-room
+messages, and room stats, and plays speech on the local machine. It does not send heartbeats,
+gift events, comments, or any other data to the FlowLens backend.
 
 Dry-run first to confirm the room and announcement text:
 
@@ -72,13 +72,36 @@ a `v.douyin.com` short link, or the URL suffix. Useful options:
 - `--template "感谢 {nickname} 送出 {gift_name}{gift_count_text}"`
 - `--announce-comments`
 - `--comment-interval-seconds 1.5`
+- `--announce-members`
+- `--member-interval-seconds 2`
+- `--announce-stats`
+- `--stats-interval-seconds 30`
 - `--min-gift-value 10`
 - `--speech-rate 1`
 - `--speech-volume 90`
 - `--list-voices`
 - `--voice "Microsoft Huihui Desktop"`
-- `--speech-bitness 32 --voice "Ekho Mandarin"`
+- `--speech-engine edge --edge-voice zh-CN-XiaoxiaoNeural`
 - `--speech-engine print`
+
+### Edge neural speech engine
+
+For more natural online voices, install `edge-tts` and run the announcer with
+`--speech-engine edge`. This uses Microsoft Edge neural voices instead of the
+local system speech engine.
+
+```bash
+python -m pip install --target collectors/douyin/_deps edge-tts
+python collectors/douyin/local_gift_announcer.py --fetcher-path E:/JAVA/DouyinLiveWebFetcher --live-id 510200350291 --speech-engine edge --edge-voice zh-CN-XiaoxiaoNeural
+```
+
+Useful Edge options:
+
+- `--edge-voice zh-CN-XiaoxiaoNeural`
+- `--edge-voice zh-CN-XiaoyiNeural`
+- `--edge-rate -5%`
+- `--edge-pitch +0Hz`
+- `--edge-no-cache`
 
 ### VoxCPM speech engine
 

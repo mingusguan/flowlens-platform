@@ -77,6 +77,9 @@ public class LiveCloudCollectorService {
             liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
             return;
         }
+        if (collectorProperties.canRunCloudProbe() && stopSessionIfConfirmedNotLive(session, anchor)) {
+            return;
+        }
         if (findAliveRunningCollectorTask(session, anchor) == null) {
             startCloudCollector(session, anchor);
         }
@@ -107,6 +110,21 @@ public class LiveCloudCollectorService {
         reconcileSession(session);
     }
 
+    private boolean stopSessionIfConfirmedNotLive(LiveSession session, LiveAnchor anchor) {
+        CloudProbeResult result = runCloudProbe(session, anchor);
+        log.info("云端运行场次复探结果，anchorId={}, sessionId={}, live={}, roomStatus={}, liveId={}, roomId={}, error={}",
+            anchor.getId(), session.getId(), result.live(), result.roomStatus(), result.liveId(), result.roomId(), result.error());
+        if (!isConfirmedNotLive(result)) {
+            return false;
+        }
+        stopCloudCollectors(session, "confirmed not live");
+        liveDutyService.endSession(session.getId());
+        liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
+        log.info("云端复探确认主播未开播，结束直播场次，anchorId={}, sessionId={}, liveId={}, roomId={}",
+            anchor.getId(), session.getId(), session.getLiveId(), session.getRoomId());
+        return true;
+    }
+
     private void startCloudCollector(LiveSession session, LiveAnchor anchor) {
         String commandLine = buildCommandLine(session, anchor);
         if (!StringUtils.hasText(commandLine)) {
@@ -130,6 +148,8 @@ public class LiveCloudCollectorService {
             log.warn("启动云端采集失败，sessionId={}, command={}", session.getId(), commandLine, ex);
             task.markFailed(ex.getMessage());
             liveDutyService.saveCollectorTask(task);
+            liveDutyService.endSession(session.getId());
+            liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
         } catch (RuntimeException ex) {
             if (process != null && process.isAlive()) {
                 process.destroy();
@@ -137,7 +157,9 @@ public class LiveCloudCollectorService {
             log.warn("绑定云端采集任务失败，sessionId={}, taskId={}, command={}", session.getId(), task.getId(), commandLine, ex);
             task.markFailed(ex.getMessage());
             liveDutyService.saveCollectorTask(task);
-            if (liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId())) {
+            if (liveDutyService.endSessionIfCurrentCloudTask(session.getId(), task.getId())) {
+                liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
+            } else if (liveDutyService.releaseCloudTaskIfCurrent(session.getId(), task.getId())) {
                 liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
             }
         }
@@ -210,7 +232,11 @@ public class LiveCloudCollectorService {
                     task.markFailed("process exited with code " + exitCode);
                 }
                 liveDutyService.saveCollectorTask(task);
-                if (liveDutyService.releaseCloudTaskIfCurrent(task.getSessionId(), task.getId())) {
+                if (liveDutyService.endSessionIfCurrentCloudTask(task.getSessionId(), task.getId())) {
+                    liveDutyService.markAnchorCloudCollecting(task.getAnchorId(), false);
+                    log.info("云端采集进程退出，自动结束直播场次，taskId={}, sessionId={}, anchorId={}",
+                        task.getId(), task.getSessionId(), task.getAnchorId());
+                } else if (liveDutyService.releaseCloudTaskIfCurrent(task.getSessionId(), task.getId())) {
                     liveDutyService.markAnchorCloudCollecting(task.getAnchorId(), false);
                 }
                 log.warn("云端采集进程退出，taskId={}, sessionId={}, anchorId={}, processId={}, exitCode={}",
@@ -239,7 +265,11 @@ public class LiveCloudCollectorService {
     }
 
     private CloudProbeResult runCloudProbe(LiveAnchor anchor) {
-        List<String> command = buildProbeCommand(anchor);
+        return runCloudProbe(null, anchor);
+    }
+
+    private CloudProbeResult runCloudProbe(LiveSession session, LiveAnchor anchor) {
+        List<String> command = buildProbeCommand(session, anchor);
         if (command.isEmpty()) {
             return CloudProbeResult.notLive("cloud command not configured");
         }
@@ -254,17 +284,17 @@ public class LiveCloudCollectorService {
             boolean finished = process.waitFor(collectorProperties.getProbeTimeoutSeconds(), TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
-                log.warn("云端开播探测超时，anchorId={}, command={}", anchor.getId(), String.join(" ", command));
+                log.warn("云端开播探测超时，anchorId={}, sessionId={}, command={}", anchor.getId(), session == null ? null : session.getId(), String.join(" ", command));
                 return CloudProbeResult.notLive("probe timeout");
             }
             String output = awaitProcessOutput(outputFuture);
             if (process.exitValue() != 0) {
-                log.warn("云端开播探测失败，anchorId={}, exitCode={}, output={}", anchor.getId(), process.exitValue(), trimOutput(output));
+                log.warn("云端开播探测失败，anchorId={}, sessionId={}, exitCode={}, output={}", anchor.getId(), session == null ? null : session.getId(), process.exitValue(), trimOutput(output));
                 return CloudProbeResult.notLive("probe failed");
             }
             return parseProbeOutput(output);
         } catch (IOException ex) {
-            log.warn("启动云端开播探测失败，anchorId={}, command={}", anchor.getId(), String.join(" ", command), ex);
+            log.warn("启动云端开播探测失败，anchorId={}, sessionId={}, command={}", anchor.getId(), session == null ? null : session.getId(), String.join(" ", command), ex);
             return CloudProbeResult.notLive(ex.getMessage());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -338,13 +368,13 @@ public class LiveCloudCollectorService {
         return command;
     }
 
-    private List<String> buildProbeCommand(LiveAnchor anchor) {
+    private List<String> buildProbeCommand(LiveSession session, LiveAnchor anchor) {
         if (!StringUtils.hasText(collectorProperties.getExecutable())) {
             return List.of();
         }
         List<String> command = new ArrayList<>();
-        command.add(renderToken(collectorProperties.getExecutable(), null, anchor));
-        command.addAll(buildArguments(null, anchor));
+        command.add(renderToken(collectorProperties.getExecutable(), session, anchor));
+        command.addAll(buildArguments(session, anchor));
         command.add("--probe");
         return command;
     }
@@ -403,6 +433,10 @@ public class LiveCloudCollectorService {
             }
         }
         return null;
+    }
+
+    private boolean isConfirmedNotLive(CloudProbeResult result) {
+        return result != null && !result.live() && !StringUtils.hasText(result.error());
     }
 
     private record CloudProbeResult(boolean live, Integer roomStatus, String liveId, String roomId, String liveTitle, String error) {

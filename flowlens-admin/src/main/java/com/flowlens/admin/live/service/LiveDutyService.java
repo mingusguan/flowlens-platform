@@ -304,6 +304,20 @@ public class LiveDutyService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public boolean endSessionIfCurrentCloudTask(Long sessionId, Long taskId) {
+        LiveSession session = sessionMapper.selectById(sessionId);
+        if (session == null || !session.isRunning()) {
+            return false;
+        }
+        if (taskId == null || session.getCloudTaskId() == null || !session.getCloudTaskId().equals(taskId)) {
+            return false;
+        }
+        session.end();
+        sessionMapper.updateById(session);
+        return true;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void switchSessionSource(Long sessionId, String source) {
         LiveSession session = requireSession(sessionId);
         session.switchSource(source);
@@ -365,7 +379,15 @@ public class LiveDutyService {
     private void acceptEvent(LiveEventReportDTO dto, String source) {
         LiveAnchor anchor = requireAnchorForReport(dto.getAnchorId(), dto.getReportToken());
         anchor.ensureEnabled();
-        LiveSession session = ensureRunningSession(anchor, dto.getLiveId(), dto.getRoomId(), dto.getLiveTitle(), source);
+        String eventType = normalizeReportEventType(dto.getEventType());
+        LiveSession session = shouldCreateSessionFromEvent(eventType)
+            ? ensureRunningSession(anchor, dto.getLiveId(), dto.getRoomId(), dto.getLiveTitle(), source)
+            : findRunningSession(anchor.getId());
+        if (session == null) {
+            log.info("忽略无运行场次的直播事件，anchorId={}, source={}, type={}, liveId={}, roomId={}, msgId={}",
+                anchor.getId(), source, eventType, dto.getLiveId(), dto.getRoomId(), dto.getMsgId());
+            return;
+        }
         LocalDateTime defaultEventTime = LocalDateTime.now();
         LiveEvent event = LiveEvent.fromReport(session, dto, source, defaultEventTime);
         if (!shouldPersistEventDetail(event)) {
@@ -395,6 +417,13 @@ public class LiveDutyService {
             session.end();
             sessionMapper.updateById(session);
         }
+    }
+
+    private boolean shouldCreateSessionFromEvent(String eventType) {
+        // 统计快照、进房和下播只能作用于已有场次，不能反过来创建新的直播场次。
+        return !LiveEvent.TYPE_ROOM_STATS.equals(eventType)
+            && !LiveEvent.TYPE_MEMBER.equals(eventType)
+            && !LiveEvent.TYPE_LIVE_END.equals(eventType);
     }
 
     private boolean shouldPersistEventDetail(LiveEvent event) {
@@ -706,5 +735,22 @@ public class LiveDutyService {
             || normalized.contains("amemv.com")
             || normalized.contains("抖音")
             || normalized.length() > 80;
+    }
+
+    private String normalizeReportEventType(String type) {
+        if (!StringUtils.hasText(type)) {
+            throw new BusinessException("事件类型不能为空");
+        }
+        String normalized = type.trim().toUpperCase();
+        if (!LiveEvent.TYPE_GIFT.equals(normalized)
+            && !LiveEvent.TYPE_COMMENT.equals(normalized)
+            && !LiveEvent.TYPE_LIKE.equals(normalized)
+            && !LiveEvent.TYPE_LIVE_END.equals(normalized)
+            && !LiveEvent.TYPE_MEMBER.equals(normalized)
+            && !LiveEvent.TYPE_FOLLOW.equals(normalized)
+            && !LiveEvent.TYPE_ROOM_STATS.equals(normalized)) {
+            throw new BusinessException("事件类型不支持");
+        }
+        return normalized;
     }
 }
