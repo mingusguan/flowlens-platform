@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deleteLiveAnchorApi,
@@ -13,8 +14,9 @@ import {
   type LiveSessionItem,
   type LiveSummary
 } from '../../api/system'
-import { Copy, Edit, Play, Plus, RadioTower, RefreshCw, Search, Square, Trash2 } from 'lucide-vue-next'
+import { Copy, Edit, Play, Plus, RadioTower, RefreshCw, Search, Smartphone, Square, Trash2 } from 'lucide-vue-next'
 
+const router = useRouter()
 const loading = ref(false)
 const keyword = ref('')
 const anchors = ref<LiveAnchorItem[]>([])
@@ -135,6 +137,10 @@ const sourceText = (source?: string) => {
   return '未接入'
 }
 
+const goMobileInput = () => {
+  router.push('/mobile/live-input')
+}
+
 onMounted(loadData)
 </script>
 
@@ -189,6 +195,10 @@ onMounted(loadData)
           </div>
           <button class="btn btn-secondary" @click="loadData">
             <RefreshCw :size="16" />
+          </button>
+          <button class="btn btn-secondary" @click="goMobileInput">
+            <Smartphone :size="16" />
+            手机录入
           </button>
           <button class="btn btn-primary" @click="openDialog()">
             <Plus :size="16" />

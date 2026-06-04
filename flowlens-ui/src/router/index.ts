@@ -6,10 +6,12 @@ import UsersView from '../views/system/UsersView.vue'
 import RolesView from '../views/system/RolesView.vue'
 import MenusView from '../views/system/MenusView.vue'
 import LiveAnchorsView from '../views/live/LiveAnchorsView.vue'
+import MobileLiveInputView from '../views/live/MobileLiveInputView.vue'
 import AppLayout from '../layout/AppLayout.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/login', component: LoginView },
+  { path: '/mobile/live-input', component: MobileLiveInputView, meta: { title: '手机录入直播链接' } },
   {
     path: '/',
     component: AppLayout,
@@ -32,7 +34,12 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (to.path === '/login') return true
-  if (!auth.token) return '/login'
+  if (!auth.token) {
+    return {
+      path: '/login',
+      query: { redirect: to.fullPath }
+    }
+  }
   if (!auth.user) {
     await auth.loadProfile()
     await auth.loadMenus()

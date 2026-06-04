@@ -1,9 +1,10 @@
 <script setup lang="ts">import { reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '../stores/auth';
 import { ArrowRight, LockKeyhole, UserRound, Eye, EyeOff } from 'lucide-vue-next';
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 const loading = ref(false);
 const showPassword = ref(false);
@@ -16,7 +17,9 @@ const submit = async () => {
  try {
  await auth.login(form);
  ElMessage.success('欢迎回来');
- router.replace('/dashboard');
+ const redirectParam = typeof route.query.redirect === 'string' ? route.query.redirect : '';
+ const redirect = redirectParam.startsWith('/') && !redirectParam.startsWith('//') ? redirectParam : '/dashboard';
+ router.replace(redirect);
  }
  finally {
  loading.value = false;
