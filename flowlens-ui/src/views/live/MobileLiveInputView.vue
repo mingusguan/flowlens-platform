@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ChevronLeft, LogOut, RadioTower, RefreshCw, Save, Search, X } from 'lucide-vue-next'
+import { ChevronLeft, LogOut, Plus, RefreshCw, Save, Search, X } from 'lucide-vue-next'
 import { listLiveAnchorsApi, saveLiveAnchorApi, type LiveAnchorItem } from '../../api/system'
 import { useAuthStore } from '../../stores/auth'
 
@@ -14,13 +14,16 @@ const saving = ref(false)
 const keyword = ref('')
 const anchors = ref<LiveAnchorItem[]>([])
 const activeAnchorId = ref<number>()
+const createMode = ref(false)
 
 const form = reactive({
+  anchorName: '',
   liveInput: '',
   cloudCollectEnabled: 1
 })
 
-const activeAnchor = computed(() => anchors.value.find((anchor) => anchor.id === activeAnchorId.value))
+const activeAnchor = computed(() => createMode.value ? undefined : anchors.value.find((anchor) => anchor.id === activeAnchorId.value))
+const formModeText = computed(() => createMode.value ? '新增主播' : '更新主播')
 
 const filteredAnchors = computed(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -35,9 +38,19 @@ const filteredAnchors = computed(() => {
 })
 
 const selectAnchor = (anchor: LiveAnchorItem) => {
+  createMode.value = false
   activeAnchorId.value = anchor.id
+  form.anchorName = anchor.anchorName
   form.liveInput = anchor.douyinLiveId || ''
   form.cloudCollectEnabled = anchor.cloudCollectEnabled ?? 1
+}
+
+const startCreateAnchor = () => {
+  createMode.value = true
+  activeAnchorId.value = undefined
+  form.anchorName = ''
+  form.liveInput = ''
+  form.cloudCollectEnabled = 1
 }
 
 const loadData = async () => {
@@ -45,10 +58,15 @@ const loadData = async () => {
   try {
     const { data } = await listLiveAnchorsApi('')
     anchors.value = data || []
+    if (createMode.value) {
+      return
+    }
     if (!activeAnchorId.value && anchors.value.length > 0) {
       selectAnchor(anchors.value[0])
     } else if (activeAnchorId.value && !anchors.value.some((anchor) => anchor.id === activeAnchorId.value)) {
-      activeAnchorId.value = undefined
+      startCreateAnchor()
+    } else if (anchors.value.length === 0) {
+      startCreateAnchor()
     }
   } finally {
     loading.value = false
@@ -60,8 +78,9 @@ const clearInput = () => {
 }
 
 const saveLiveInput = async () => {
-  if (!activeAnchor.value) {
-    ElMessage.warning('请先选择主播')
+  const anchorName = form.anchorName.trim()
+  if (!anchorName) {
+    ElMessage.warning('请填写主播名称')
     return
   }
   if (form.cloudCollectEnabled === 1 && !form.liveInput.trim()) {
@@ -70,8 +89,10 @@ const saveLiveInput = async () => {
   }
   saving.value = true
   try {
+    const wasCreateMode = createMode.value
     const payload: LiveAnchorItem = {
-      ...activeAnchor.value,
+      ...(activeAnchor.value || { status: 1 }),
+      anchorName,
       douyinLiveId: form.liveInput.trim(),
       cloudCollectEnabled: form.cloudCollectEnabled
     }
@@ -79,9 +100,11 @@ const saveLiveInput = async () => {
     const index = anchors.value.findIndex((anchor) => anchor.id === data.id)
     if (index >= 0) {
       anchors.value.splice(index, 1, data)
+    } else {
+      anchors.value.unshift(data)
     }
     selectAnchor(data)
-    ElMessage.success('已保存直播链接')
+    ElMessage.success(wasCreateMode ? '已新增主播' : '已保存直播链接')
   } finally {
     saving.value = false
   }
@@ -122,9 +145,23 @@ onMounted(loadData)
       <button class="icon-button" type="button" title="刷新" :disabled="loading" @click="loadData">
         <RefreshCw :size="18" :class="{ spinning: loading }" />
       </button>
+      <button class="icon-button" type="button" title="新增主播" @click="startCreateAnchor">
+        <Plus :size="18" />
+      </button>
     </section>
 
     <section class="anchor-strip" aria-label="主播列表">
+      <button
+        :class="['anchor-chip create-chip', createMode && 'active']"
+        type="button"
+        @click="startCreateAnchor"
+      >
+        <span class="anchor-avatar"><Plus :size="18" /></span>
+        <span class="anchor-chip-text">
+          <strong>新增主播</strong>
+          <small>手机端新建配置</small>
+        </span>
+      </button>
       <button
         v-for="anchor in filteredAnchors"
         :key="anchor.id"
@@ -141,13 +178,27 @@ onMounted(loadData)
       <div v-if="!loading && filteredAnchors.length === 0" class="empty-hint">没有匹配的主播</div>
     </section>
 
-    <section v-if="activeAnchor" class="mobile-live-form">
+    <section v-if="activeAnchor || createMode" class="mobile-live-form">
       <div class="selected-anchor">
-        <div class="selected-avatar">{{ activeAnchor.anchorName.slice(0, 1) }}</div>
-        <div>
-          <span class="selected-label">当前主播</span>
-          <strong>{{ activeAnchor.anchorName }}</strong>
+        <div class="selected-avatar">
+          <Plus v-if="createMode" :size="20" />
+          <span v-else>{{ activeAnchor?.anchorName.slice(0, 1) }}</span>
         </div>
+        <div>
+          <span class="selected-label">当前模式</span>
+          <strong>{{ formModeText }}</strong>
+        </div>
+      </div>
+
+      <div class="field-block">
+        <label for="anchor-name">主播名称</label>
+        <input
+          id="anchor-name"
+          v-model="form.anchorName"
+          class="text-input"
+          type="text"
+          placeholder="例如：灵犀直播间"
+        />
       </div>
 
       <div class="field-block">
@@ -179,7 +230,7 @@ onMounted(loadData)
         </button>
       </div>
 
-      <dl class="mobile-meta">
+      <dl v-if="activeAnchor && !createMode" class="mobile-meta">
         <div>
           <dt>当前保存</dt>
           <dd>{{ activeAnchor.douyinLiveId || '-' }}</dd>
@@ -193,14 +244,14 @@ onMounted(loadData)
       <button class="save-button" type="button" :disabled="saving" @click="saveLiveInput">
         <span v-if="saving" class="button-loader"></span>
         <Save v-else :size="18" />
-        保存直播链接
+        {{ createMode ? '新增主播' : '保存直播链接' }}
       </button>
     </section>
 
     <section v-else class="mobile-live-form empty-state">
-      <RadioTower :size="32" />
+      <RefreshCw :size="32" :class="{ spinning: loading }" />
       <strong>{{ loading ? '正在加载主播' : '暂无主播配置' }}</strong>
-      <span>{{ loading ? '稍等一下' : '请先在 PC 端创建主播，再用手机录入直播链接' }}</span>
+      <span>{{ loading ? '稍等一下' : '可以直接点新增主播创建配置' }}</span>
     </section>
 
     <button class="desktop-link" type="button" @click="goDesktop">
@@ -399,11 +450,32 @@ onMounted(loadData)
   gap: 8px;
 }
 
+.field-block + .field-block {
+  margin-top: 14px;
+}
+
 .field-block label,
 .mobile-status-row span {
   color: var(--color-text-secondary);
   font-size: 13px;
   font-weight: 600;
+}
+
+.text-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  outline: 0;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+  font-size: 15px;
+}
+
+.text-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
 }
 
 .textarea-wrap {
