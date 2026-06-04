@@ -38,10 +38,19 @@ public class LiveCloudCollectorService {
     @Scheduled(fixedDelayString = "${flowlens.live.collector.probe-delay-ms:60000}")
     public void probeLiveRooms() {
         if (!collectorProperties.canRunCloudProbe()) {
+            log.info("云端开播探测跳过，cloudEnabled={}, probeEnabled={}, executable={}",
+                collectorProperties.isCloudEnabled(),
+                collectorProperties.isProbeEnabled(),
+                collectorProperties.getExecutable());
             return;
         }
         liveDutyService.markStaleClientsOffline();
-        liveDutyService.listCloudProbeAnchorEntities().forEach(anchor -> {
+        List<LiveAnchor> anchors = liveDutyService.listCloudProbeAnchorEntities();
+        log.info("云端开播探测开始，候选主播数={}，probeDelayMs={}，probeTimeoutSeconds={}",
+            anchors.size(),
+            collectorProperties.getProbeDelayMs(),
+            collectorProperties.getProbeTimeoutSeconds());
+        anchors.forEach(anchor -> {
             try {
                 probeAnchor(anchor);
             } catch (Exception ex) {
@@ -72,12 +81,20 @@ public class LiveCloudCollectorService {
 
     private void probeAnchor(LiveAnchor anchor) {
         if (liveDutyService.hasRunningSession(anchor.getId())) {
+            log.info("云端开播探测跳过，主播已有直播场次，anchorId={}, liveId={}, roomId={}",
+                anchor.getId(), anchor.getDouyinLiveId(), anchor.getRoomId());
             return;
         }
         if (anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())) {
+            log.info("云端开播探测跳过，客户端仍在线，anchorId={}, liveId={}, roomId={}",
+                anchor.getId(), anchor.getDouyinLiveId(), anchor.getRoomId());
             return;
         }
+        log.info("云端开播探测主播，anchorId={}, anchorName={}, liveId={}, roomId={}",
+            anchor.getId(), anchor.getAnchorName(), anchor.getDouyinLiveId(), anchor.getRoomId());
         CloudProbeResult result = runCloudProbe(anchor);
+        log.info("云端开播探测结果，anchorId={}, live={}, roomStatus={}, roomId={}, liveTitle={}, error={}",
+            anchor.getId(), result.live(), result.roomStatus(), result.roomId(), result.liveTitle(), result.error());
         if (!result.live()) {
             return;
         }
