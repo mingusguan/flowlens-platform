@@ -380,9 +380,7 @@ public class LiveDutyService {
         LiveAnchor anchor = requireAnchorForReport(dto.getAnchorId(), dto.getReportToken());
         anchor.ensureEnabled();
         String eventType = normalizeReportEventType(dto.getEventType());
-        LiveSession session = shouldCreateSessionFromEvent(eventType)
-            ? ensureRunningSession(anchor, dto.getLiveId(), dto.getRoomId(), dto.getLiveTitle(), source)
-            : findRunningSession(anchor.getId());
+        LiveSession session = findRunningSession(anchor.getId());
         if (session == null) {
             log.info("忽略无运行场次的直播事件，anchorId={}, source={}, type={}, liveId={}, roomId={}, msgId={}",
                 anchor.getId(), source, eventType, dto.getLiveId(), dto.getRoomId(), dto.getMsgId());
@@ -417,13 +415,6 @@ public class LiveDutyService {
             session.end();
             sessionMapper.updateById(session);
         }
-    }
-
-    private boolean shouldCreateSessionFromEvent(String eventType) {
-        // 统计快照、进房和下播只能作用于已有场次，不能反过来创建新的直播场次。
-        return !LiveEvent.TYPE_ROOM_STATS.equals(eventType)
-            && !LiveEvent.TYPE_MEMBER.equals(eventType)
-            && !LiveEvent.TYPE_LIVE_END.equals(eventType);
     }
 
     private boolean shouldPersistEventDetail(LiveEvent event) {
