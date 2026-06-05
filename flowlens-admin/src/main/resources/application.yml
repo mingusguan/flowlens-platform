@@ -24,7 +24,6 @@ flowlens:
     expire-minutes: ${FLOWLENS_JWT_EXPIRE_MINUTES:480}
   live:
     collector:
-      client-timeout-seconds: ${FLOWLENS_LIVE_CLIENT_TIMEOUT_SECONDS:45}
       schedule-delay-ms: ${FLOWLENS_LIVE_COLLECTOR_SCHEDULE_DELAY_MS:30000}
       probe-enabled: ${FLOWLENS_LIVE_COLLECTOR_PROBE_ENABLED:true}
       probe-delay-ms: ${FLOWLENS_LIVE_COLLECTOR_PROBE_DELAY_MS:60000}

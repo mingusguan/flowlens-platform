@@ -4,26 +4,22 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.flowlens.admin.common.BusinessException;
 import com.flowlens.admin.live.dto.LiveAnchorSaveDTO;
-import com.flowlens.admin.live.dto.LiveClientHeartbeatDTO;
 import com.flowlens.admin.live.dto.LiveEventReportDTO;
-import com.flowlens.admin.live.dto.LiveSessionStartDTO;
 import com.flowlens.admin.live.entity.LiveAnchor;
 import com.flowlens.admin.live.entity.LiveCollectorTask;
 import com.flowlens.admin.live.entity.LiveEvent;
-import com.flowlens.admin.live.entity.LiveEventRaw;
 import com.flowlens.admin.live.entity.LiveSession;
 import com.flowlens.admin.live.entity.LiveSessionStat;
 import com.flowlens.admin.live.entity.LiveUserGiftStat;
 import com.flowlens.admin.live.mapper.LiveAnchorMapper;
 import com.flowlens.admin.live.mapper.LiveCollectorTaskMapper;
 import com.flowlens.admin.live.mapper.LiveEventMapper;
-import com.flowlens.admin.live.mapper.LiveEventRawMapper;
 import com.flowlens.admin.live.mapper.LiveSessionMapper;
 import com.flowlens.admin.live.mapper.LiveSessionStatMapper;
 import com.flowlens.admin.live.mapper.LiveUserGiftStatMapper;
+import com.flowlens.admin.live.service.DouyinLiveInputResolver.ResolvedDouyinLiveInput;
 import com.flowlens.admin.live.sharding.LiveEventShardTableService;
 import com.flowlens.admin.live.sharding.LiveEventTableRouter;
-import com.flowlens.admin.live.service.DouyinLiveInputResolver.ResolvedDouyinLiveInput;
 import com.flowlens.admin.live.vo.LiveAnchorVO;
 import com.flowlens.admin.live.vo.LiveCollectorTaskVO;
 import com.flowlens.admin.live.vo.LiveGiftRankVO;
@@ -36,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +40,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 @Slf4j
@@ -52,21 +51,22 @@ public class LiveDutyService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
+    private static final Set<String> ACTIVE_COLLECTOR_STATUSES = Set.of(
+        LiveCollectorTask.STATUS_STARTING,
+        LiveCollectorTask.STATUS_RUNNING
+    );
+
     private final LiveAnchorMapper anchorMapper;
 
     private final LiveSessionMapper sessionMapper;
 
     private final LiveEventMapper eventMapper;
 
-    private final LiveEventRawMapper eventRawMapper;
-
     private final LiveSessionStatMapper sessionStatMapper;
 
     private final LiveUserGiftStatMapper userGiftStatMapper;
 
     private final LiveCollectorTaskMapper collectorTaskMapper;
-
-    private final LiveCollectorProperties collectorProperties;
 
     private final LiveEventShardTableService shardTableService;
 
@@ -83,6 +83,10 @@ public class LiveDutyService {
         return anchorMapper.selectList(wrapper).stream()
             .map(this::toAnchorVO)
             .toList();
+    }
+
+    public LiveAnchorVO getAnchor(Long id) {
+        return toAnchorVO(requireAnchor(id));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -103,40 +107,21 @@ public class LiveDutyService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public LiveSessionVO startSession(Long anchorId, LiveSessionStartDTO dto) {
-        LiveAnchor anchor = requireAnchor(anchorId);
-        anchor.ensureEnabled();
-        LiveSession exists = findRunningSession(anchorId);
-        if (exists != null) {
-            return toSessionVO(exists, Map.of(anchor.getId(), anchor));
+    public LiveAnchorVO changeAnchorCloudMonitor(Long id, boolean enabled) {
+        LiveAnchor anchor = requireAnchor(id);
+        anchor.setCloudCollectEnabled(enabled ? LiveAnchor.FLAG_YES : LiveAnchor.FLAG_NO);
+        anchor.setUpdateTime(LocalDateTime.now());
+        if (!enabled) {
+            anchor.setCloudCollecting(LiveAnchor.FLAG_NO);
         }
-        ResolvedDouyinLiveInput resolvedInput = douyinLiveInputResolver.resolve(dto.getLiveId());
-        String inputLiveId = firstText(resolvedInput.liveId(), resolvedInput.canonicalInput());
-        if (!StringUtils.hasText(inputLiveId) && !StringUtils.hasText(resolvedInput.roomId())) {
-            inputLiveId = firstText(dto.getLiveId());
-        }
-        String liveId = firstText(inputLiveId, anchor.getDouyinLiveId());
-        String roomId = firstText(dto.getRoomId(), resolvedInput.roomId());
-        String liveTitle = firstText(dto.getLiveTitle(), resolvedInput.liveTitle());
-        String source = anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())
-            ? LiveSession.SOURCE_CLIENT
-            : LiveSession.SOURCE_NONE;
-        LiveSession session = LiveSession.start(LiveSession.StartSessionCommand.builder()
-            .anchorId(anchorId)
-            .liveId(liveId)
-            .roomId(roomId)
-            .liveTitle(liveTitle)
-            .activeSource(source)
-            .build());
-        sessionMapper.insert(session);
-        return toSessionVO(session, Map.of(anchor.getId(), anchor));
+        anchorMapper.updateById(anchor);
+        return toAnchorVO(anchor);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public void endSession(Long sessionId) {
         LiveSession session = requireSession(sessionId);
-        session.end();
-        sessionMapper.updateById(session);
+        endSessionAndStopCollectors(session, "session ended");
     }
 
     public List<LiveSessionVO> listSessions(Long anchorId, String status) {
@@ -184,35 +169,6 @@ public class LiveDutyService {
             .viewerCount(stat == null ? 0L : stat.getViewerCount())
             .giftRank(buildGiftRank(sessionId))
             .build();
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public LiveSessionVO clientHeartbeat(LiveClientHeartbeatDTO dto) {
-        LiveAnchor anchor = requireAnchorForReport(dto.getAnchorId(), dto.getReportToken());
-        anchor.ensureEnabled();
-        anchor.markClientHeartbeat(dto.getClientInstanceId(), dto.getClientVersion());
-        anchorMapper.updateById(anchor);
-        if ("ENDED".equalsIgnoreCase(dto.getLiveStatus())) {
-            LiveSession running = findRunningSession(anchor.getId());
-            if (running != null) {
-                running.end();
-                sessionMapper.updateById(running);
-                return toSessionVO(running, Map.of(anchor.getId(), anchor));
-            }
-            return null;
-        }
-        if ("LIVE".equalsIgnoreCase(dto.getLiveStatus()) || "RUNNING".equalsIgnoreCase(dto.getLiveStatus())) {
-            LiveSession session = ensureRunningSession(anchor, dto.getLiveId(), dto.getRoomId(), dto.getLiveTitle(), LiveSession.SOURCE_CLIENT);
-            session.switchSource(LiveSession.SOURCE_CLIENT);
-            sessionMapper.updateById(session);
-            return toSessionVO(session, Map.of(anchor.getId(), anchor));
-        }
-        return null;
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public void reportClientEvent(LiveEventReportDTO dto) {
-        acceptEvent(dto, LiveEvent.SOURCE_CLIENT);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -269,19 +225,6 @@ public class LiveDutyService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void markStaleClientsOffline() {
-        List<LiveAnchor> anchors = anchorMapper.selectList(new LambdaQueryWrapper<LiveAnchor>()
-            .eq(LiveAnchor::getClientOnline, LiveAnchor.FLAG_YES));
-        anchors.stream()
-            .filter(anchor -> !anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds()))
-            .forEach(anchor -> {
-                // 心跳超时后先标记客户端离线，云端调度器下一步再决定是否接管。
-                anchor.markClientOffline();
-                anchorMapper.updateById(anchor);
-            });
-    }
-
-    @Transactional(rollbackFor = Exception.class)
     public void bindCloudTask(LiveSession session, LiveCollectorTask task) {
         session.bindCloudTask(task.getId());
         sessionMapper.updateById(session);
@@ -299,8 +242,7 @@ public class LiveDutyService {
         if (!session.releaseCloudTaskIfCurrent(taskId)) {
             return session.getCloudTaskId() == null;
         }
-        sessionMapper.updateById(session);
-        return true;
+        return updateReleasedCloudTask(session, taskId) || isCloudTaskReleased(sessionId);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -312,8 +254,7 @@ public class LiveDutyService {
         if (taskId == null || session.getCloudTaskId() == null || !session.getCloudTaskId().equals(taskId)) {
             return false;
         }
-        session.end();
-        sessionMapper.updateById(session);
+        endSessionAndStopCollectors(session, "cloud collector exited");
         return true;
     }
 
@@ -352,6 +293,25 @@ public class LiveDutyService {
             collectorTaskMapper.updateById(task);
         }
         return task;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean finishCollectorTaskIfActive(LiveCollectorTask task, int exitCode) {
+        LiveCollectorTask latest = collectorTaskMapper.selectById(task.getId());
+        if (latest == null || !ACTIVE_COLLECTOR_STATUSES.contains(latest.getStatus())) {
+            return false;
+        }
+        if (exitCode == 0) {
+            latest.markStopped("process exited with code 0");
+        } else {
+            latest.markFailed("process exited with code " + exitCode);
+        }
+        task.setStatus(latest.getStatus());
+        task.setLastError(latest.getLastError());
+        task.setStopTime(latest.getStopTime());
+        task.setUpdateTime(latest.getUpdateTime());
+        collectorTaskMapper.updateById(latest);
+        return true;
     }
 
     public List<LiveCollectorTaskVO> listCollectorTasks(Long sessionId) {
@@ -405,29 +365,120 @@ public class LiveDutyService {
             } catch (DuplicateKeyException ignored) {
                 return;
             }
-            saveRawPayload(event, dto.getRawPayload());
         } finally {
             LiveEventTableRouter.clear();
         }
         updateEventStats(event);
         logReceivedEvent(event);
         if (event.isEndEvent()) {
-            session.end();
-            sessionMapper.updateById(session);
+            endSessionAndStopCollectors(session, "live end event");
         }
+    }
+
+    private void endSessionAndStopCollectors(LiveSession session, String stopReason) {
+        boolean hadCloudCollector = LiveSession.SOURCE_CLOUD.equals(session.getActiveSource()) || session.getCloudTaskId() != null;
+        session.end();
+        updateEndedSession(session);
+        int stoppedTaskCount = stopActiveCollectorTasks(session.getId(), stopReason);
+        if (hadCloudCollector || stoppedTaskCount > 0) {
+            clearAnchorCloudCollecting(session.getAnchorId());
+        }
+    }
+
+    private void updateEndedSession(LiveSession session) {
+        sessionMapper.update(null, new LambdaUpdateWrapper<LiveSession>()
+            .eq(LiveSession::getId, session.getId())
+            .set(LiveSession::getStatus, session.getStatus())
+            .set(LiveSession::getActiveSource, session.getActiveSource())
+            .set(LiveSession::getCloudTaskId, session.getCloudTaskId())
+            .set(LiveSession::getEndTime, session.getEndTime())
+            .set(LiveSession::getUpdateTime, session.getUpdateTime()));
+    }
+
+    private int stopActiveCollectorTasks(Long sessionId, String stopReason) {
+        List<LiveCollectorTask> tasks = collectorTaskMapper.selectList(new LambdaQueryWrapper<LiveCollectorTask>()
+            .eq(LiveCollectorTask::getSessionId, sessionId)
+            .in(LiveCollectorTask::getStatus, ACTIVE_COLLECTOR_STATUSES));
+        List<Long> processIds = tasks.stream()
+            .map(LiveCollectorTask::getProcessId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        LocalDateTime now = LocalDateTime.now();
+        // 场次已经结束时，任务表也必须同步收口，避免调度器不再扫描已结束场次后遗留 RUNNING 任务。
+        int stoppedCount = collectorTaskMapper.update(null, new LambdaUpdateWrapper<LiveCollectorTask>()
+            .eq(LiveCollectorTask::getSessionId, sessionId)
+            .in(LiveCollectorTask::getStatus, ACTIVE_COLLECTOR_STATUSES)
+            .set(LiveCollectorTask::getStatus, LiveCollectorTask.STATUS_STOPPED)
+            .set(LiveCollectorTask::getLastError, trimCollectorStopReason(stopReason))
+            .set(LiveCollectorTask::getStopTime, now)
+            .set(LiveCollectorTask::getUpdateTime, now));
+        if (stoppedCount > 0) {
+            destroyCollectorProcessesAfterCommit(processIds);
+        }
+        return stoppedCount;
+    }
+
+    private void destroyCollectorProcessesAfterCommit(List<Long> processIds) {
+        if (processIds.isEmpty()) {
+            return;
+        }
+        Runnable destroyProcesses = () -> processIds.forEach(this::destroyCollectorProcess);
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            destroyProcesses.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                destroyProcesses.run();
+            }
+        });
+    }
+
+    private void destroyCollectorProcess(Long processId) {
+        ProcessHandle.of(processId).ifPresent(process -> {
+            if (process.isAlive()) {
+                process.destroy();
+            }
+        });
+    }
+
+    private String trimCollectorStopReason(String stopReason) {
+        if (!StringUtils.hasText(stopReason)) {
+            return null;
+        }
+        String trimmed = stopReason.trim();
+        return trimmed.length() > 1000 ? trimmed.substring(0, 1000) : trimmed;
+    }
+
+    private boolean updateReleasedCloudTask(LiveSession session, Long taskId) {
+        return sessionMapper.update(null, new LambdaUpdateWrapper<LiveSession>()
+            .eq(LiveSession::getId, session.getId())
+            .eq(LiveSession::getCloudTaskId, taskId)
+            .set(LiveSession::getCloudTaskId, session.getCloudTaskId())
+            .set(LiveSession::getActiveSource, session.getActiveSource())
+            .set(LiveSession::getUpdateTime, session.getUpdateTime())) > 0;
+    }
+
+    private boolean isCloudTaskReleased(Long sessionId) {
+        LiveSession latest = sessionMapper.selectById(sessionId);
+        return latest != null && latest.getCloudTaskId() == null;
+    }
+
+    private void clearAnchorCloudCollecting(Long anchorId) {
+        if (anchorId == null) {
+            return;
+        }
+        anchorMapper.update(null, new LambdaUpdateWrapper<LiveAnchor>()
+            .eq(LiveAnchor::getId, anchorId)
+            .set(LiveAnchor::getCloudCollecting, LiveAnchor.FLAG_NO)
+            .set(LiveAnchor::getUpdateTime, LocalDateTime.now()));
     }
 
     private boolean shouldPersistEventDetail(LiveEvent event) {
-        // 观看人数快照和进房事件频率高，只参与场次统计，不写入月度事件明细表。
-        return !LiveEvent.TYPE_ROOM_STATS.equals(event.getEventType())
-            && !LiveEvent.TYPE_MEMBER.equals(event.getEventType());
-    }
-
-    private void saveRawPayload(LiveEvent event, String rawPayload) {
-        if (!StringUtils.hasText(rawPayload)) {
-            return;
-        }
-        eventRawMapper.insert(LiveEventRaw.fromEvent(event, rawPayload.trim()));
+        // 点赞只用于汇总；其他公开结构化事件需要留明细给直播复盘页面使用。
+        return !LiveEvent.TYPE_LIKE.equals(event.getEventType());
     }
 
     private void updateEventStats(LiveEvent event) {
@@ -517,23 +568,6 @@ public class LiveDutyService {
         return trimmed.length() <= maxLength ? trimmed : trimmed.substring(0, maxLength);
     }
 
-    private LiveSession ensureRunningSession(LiveAnchor anchor, String liveId, String roomId, String liveTitle, String source) {
-        LiveSession running = findRunningSession(anchor.getId());
-        if (running != null) {
-            return running;
-        }
-        String resolvedLiveId = firstText(liveId, anchor.getDouyinLiveId());
-        LiveSession session = LiveSession.start(LiveSession.StartSessionCommand.builder()
-            .anchorId(anchor.getId())
-            .liveId(resolvedLiveId)
-            .roomId(roomId)
-            .liveTitle(liveTitle)
-            .activeSource(source)
-            .build());
-        sessionMapper.insert(session);
-        return session;
-    }
-
     private LiveSession findRunningSession(Long anchorId) {
         return sessionMapper.selectOne(new LambdaQueryWrapper<LiveSession>()
             .eq(LiveSession::getAnchorId, anchorId)
@@ -549,10 +583,10 @@ public class LiveDutyService {
         return session;
     }
 
-    private LiveAnchor requireAnchorForReport(Long anchorId, String reportToken) {
+    public LiveAnchor requireAnchorForReport(Long anchorId, String reportToken) {
         LiveAnchor anchor = requireAnchor(anchorId);
         if (!StringUtils.hasText(reportToken) || !reportToken.equals(anchor.getReportToken())) {
-            throw new BusinessException(401, "客户端上报密钥不正确");
+            throw new BusinessException(401, "云端采集上报密钥不正确");
         }
         return anchor;
     }
@@ -655,13 +689,8 @@ public class LiveDutyService {
             .id(anchor.getId())
             .anchorName(anchor.getAnchorName())
             .douyinLiveId(anchor.getDouyinLiveId())
-            .reportToken(anchor.getReportToken())
             .status(anchor.getStatus())
             .cloudCollectEnabled(anchor.getCloudCollectEnabled())
-            .clientOnline(anchor.getClientOnline())
-            .clientInstanceId(anchor.getClientInstanceId())
-            .clientVersion(anchor.getClientVersion())
-            .clientLastHeartbeatTime(anchor.getClientLastHeartbeatTime())
             .cloudCollecting(anchor.getCloudCollecting())
             .createTime(anchor.getCreateTime())
             .build();

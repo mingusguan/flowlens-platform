@@ -14,19 +14,9 @@ public class LiveAnchorVO {
 
     private String douyinLiveId;
 
-    private String reportToken;
-
     private Integer status;
 
     private Integer cloudCollectEnabled;
-
-    private Integer clientOnline;
-
-    private String clientInstanceId;
-
-    private String clientVersion;
-
-    private LocalDateTime clientLastHeartbeatTime;
 
     private Integer cloudCollecting;
 

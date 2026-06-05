@@ -19,10 +19,8 @@ public class LiveEventShardTableService {
             return;
         }
         String eventTable = LiveEventTableRouter.monthlyEventTable(monthSuffix);
-        String rawTable = LiveEventTableRouter.monthlyRawTable(monthSuffix);
         try {
             jdbcTemplate.execute("create table if not exists " + eventTable + " like " + LiveEventTableRouter.EVENT_TABLE);
-            jdbcTemplate.execute("create table if not exists " + rawTable + " like " + LiveEventTableRouter.RAW_TABLE);
         } catch (RuntimeException ex) {
             ensuredMonths.remove(monthSuffix);
             throw ex;

@@ -23,7 +23,7 @@ const form = reactive({
 })
 
 const activeAnchor = computed(() => createMode.value ? undefined : anchors.value.find((anchor) => anchor.id === activeAnchorId.value))
-const formModeText = computed(() => createMode.value ? '新增主播' : '更新主播')
+const formModeText = computed(() => createMode.value ? '新增主播' : '更新直播链接')
 
 const filteredAnchors = computed(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -84,7 +84,7 @@ const saveLiveInput = async () => {
     return
   }
   if (form.cloudCollectEnabled === 1 && !form.liveInput.trim()) {
-    ElMessage.warning('开启云端兜底时需要填写直播链接或 liveId')
+    ElMessage.warning('开启云端监听时需要填写直播链接或 liveId')
     return
   }
   saving.value = true
@@ -218,7 +218,7 @@ onMounted(loadData)
 
       <div class="mobile-status-row">
         <div>
-          <span>云端兜底采集</span>
+          <span>云端自动监听</span>
           <small>{{ form.cloudCollectEnabled === 1 ? '开启后会用保存的 liveId 自动探测开播' : '关闭后只保存主播配置' }}</small>
         </div>
         <button
@@ -234,10 +234,6 @@ onMounted(loadData)
         <div>
           <dt>当前保存</dt>
           <dd>{{ activeAnchor.douyinLiveId || '-' }}</dd>
-        </div>
-        <div>
-          <dt>客户端</dt>
-          <dd>{{ activeAnchor.clientOnline === 1 ? '在线' : '离线' }}</dd>
         </div>
       </dl>
 
@@ -256,7 +252,7 @@ onMounted(loadData)
 
     <button class="desktop-link" type="button" @click="goDesktop">
       <ChevronLeft :size="16" />
-      返回直播值班台
+      返回主播监听台
     </button>
   </main>
 </template>
@@ -473,7 +469,8 @@ onMounted(loadData)
   font-size: 15px;
 }
 
-.text-input:focus {
+.text-input:focus,
+.textarea-wrap textarea:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
 }
@@ -494,11 +491,6 @@ onMounted(loadData)
   color: var(--color-text-primary);
   font-size: 15px;
   line-height: 1.55;
-}
-
-.textarea-wrap textarea:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
 }
 
 .clear-button {

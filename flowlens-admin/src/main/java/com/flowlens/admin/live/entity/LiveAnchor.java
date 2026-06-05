@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.flowlens.admin.common.BusinessException;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import lombok.Builder;
 import lombok.Data;
@@ -27,14 +26,6 @@ public class LiveAnchor {
 
     private Integer cloudCollectEnabled;
 
-    private Integer clientOnline;
-
-    private String clientInstanceId;
-
-    private String clientVersion;
-
-    private LocalDateTime clientLastHeartbeatTime;
-
     private Integer cloudCollecting;
 
     private LocalDateTime createTime;
@@ -52,9 +43,8 @@ public class LiveAnchor {
     public static LiveAnchor create(AnchorProfileCommand command, String reportToken) {
         LiveAnchor anchor = new LiveAnchor();
         LocalDateTime now = LocalDateTime.now();
-        anchor.reportToken = requireText(reportToken, "客户端上报密钥不能为空");
+        anchor.reportToken = requireText(reportToken, "云端采集上报密钥不能为空");
         anchor.applyProfile(command);
-        anchor.clientOnline = FLAG_NO;
         anchor.cloudCollecting = FLAG_NO;
         anchor.createTime = now;
         anchor.updateTime = now;
@@ -72,19 +62,6 @@ public class LiveAnchor {
         }
     }
 
-    public void markClientHeartbeat(String instanceId, String version) {
-        this.clientOnline = FLAG_YES;
-        this.clientInstanceId = cleanNullable(instanceId);
-        this.clientVersion = cleanNullable(version);
-        this.clientLastHeartbeatTime = LocalDateTime.now();
-        this.updateTime = LocalDateTime.now();
-    }
-
-    public void markClientOffline() {
-        this.clientOnline = FLAG_NO;
-        this.updateTime = LocalDateTime.now();
-    }
-
     public void changeCloudCollecting(boolean collecting) {
         this.cloudCollecting = collecting ? FLAG_YES : FLAG_NO;
         this.updateTime = LocalDateTime.now();
@@ -92,13 +69,6 @@ public class LiveAnchor {
 
     public boolean canStartCloudCollect() {
         return Integer.valueOf(FLAG_YES).equals(cloudCollectEnabled);
-    }
-
-    public boolean isClientAlive(int timeoutSeconds) {
-        if (!Integer.valueOf(FLAG_YES).equals(clientOnline) || clientLastHeartbeatTime == null) {
-            return false;
-        }
-        return Duration.between(clientLastHeartbeatTime, LocalDateTime.now()).getSeconds() <= timeoutSeconds;
     }
 
     private void applyProfile(AnchorProfileCommand command) {

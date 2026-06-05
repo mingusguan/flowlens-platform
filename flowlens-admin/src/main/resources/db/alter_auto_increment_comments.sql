@@ -51,13 +51,9 @@ alter table live_anchor
     modify column anchor_name varchar(80) not null comment '主播名称',
     modify column douyin_live_id varchar(80) comment '抖音直播间ID',
     modify column room_id varchar(80) comment '直播房间ID',
-    modify column report_token varchar(80) not null comment '客户端上报密钥',
+    modify column report_token varchar(80) not null comment '云端采集上报密钥',
     modify column status tinyint not null default 1 comment '主播状态：1启用，0停用',
-    modify column cloud_collect_enabled tinyint not null default 1 comment '是否启用云端兜底采集：1启用，0停用',
-    modify column client_online tinyint not null default 0 comment '客户端是否在线：1在线，0离线',
-    modify column client_instance_id varchar(120) comment '客户端实例ID',
-    modify column client_version varchar(64) comment '客户端版本号',
-    modify column client_last_heartbeat_time datetime comment '客户端最后心跳时间',
+    modify column cloud_collect_enabled tinyint not null default 1 comment '是否启用云端监听：1启用，0停用',
     modify column cloud_collecting tinyint not null default 0 comment '云端是否正在采集：1是，0否',
     modify column create_time datetime not null default current_timestamp comment '创建时间',
     modify column update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
@@ -70,7 +66,7 @@ alter table live_session
     modify column room_id varchar(80) comment '房间ID',
     modify column live_title varchar(160) comment '直播标题',
     modify column status varchar(24) not null comment '场次状态：LIVE直播中，ENDED已结束',
-    modify column active_source varchar(24) not null comment '当前采集来源：CLIENT客户端，CLOUD云端，NONE无',
+    modify column active_source varchar(24) not null comment '当前采集来源：CLOUD云端，NONE无',
     modify column cloud_task_id bigint comment '当前云端采集任务ID',
     modify column start_time datetime not null comment '开播时间',
     modify column end_time datetime comment '结束时间',
@@ -86,7 +82,7 @@ alter table live_event
     modify column live_id varchar(80) comment '直播间ID',
     modify column msg_id varchar(120) comment '平台消息ID',
     modify column event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注，ROOM_STATS直播间统计',
-    modify column source varchar(24) not null comment '事件来源：CLIENT客户端，CLOUD云端',
+    modify column source varchar(24) not null comment '事件来源：CLOUD云端',
     modify column user_id varchar(80) comment '观众用户ID',
     modify column douyin_account varchar(120) comment '观众可搜索的抖音号',
     modify column nickname varchar(120) comment '观众昵称',
@@ -100,15 +96,6 @@ alter table live_event
     modify column event_time datetime not null comment '事件发生时间',
     modify column create_time datetime not null default current_timestamp comment '创建时间',
     comment='直播事件表';
-
-alter table live_event_raw
-    modify column id bigint not null auto_increment comment '直播事件原始报文ID',
-    modify column event_id bigint not null comment '直播事件ID',
-    modify column session_id bigint not null comment '直播场次ID',
-    modify column anchor_id bigint not null comment '主播ID',
-    modify column raw_payload longtext not null comment '原始上报内容',
-    modify column create_time datetime not null default current_timestamp comment '创建时间',
-    comment='直播事件原始报文表';
 
 alter table live_session_stat
     modify column id bigint not null auto_increment comment '直播场次统计ID',

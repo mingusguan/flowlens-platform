@@ -11,8 +11,6 @@ import org.springframework.util.StringUtils;
 @ConfigurationProperties(prefix = "flowlens.live.collector")
 public class LiveCollectorProperties {
 
-    private int clientTimeoutSeconds = 45;
-
     private long scheduleDelayMs = 30000L;
 
     private boolean probeEnabled = true;

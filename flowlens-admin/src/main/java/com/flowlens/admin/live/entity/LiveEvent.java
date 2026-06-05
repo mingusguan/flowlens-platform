@@ -68,8 +68,6 @@ public class LiveEvent {
 
     public static final String TYPE_ROOM_STATS = "ROOM_STATS";
 
-    public static final String SOURCE_CLIENT = "CLIENT";
-
     public static final String SOURCE_CLOUD = "CLOUD";
 
     public static LiveEvent fromReport(LiveSession session, LiveEventReportDTO dto, String source) {
@@ -122,8 +120,8 @@ public class LiveEvent {
     }
 
     private static String normalizeSource(String source) {
-        String normalized = StringUtils.hasText(source) ? source.trim().toUpperCase() : SOURCE_CLIENT;
-        if (!SOURCE_CLIENT.equals(normalized) && !SOURCE_CLOUD.equals(normalized)) {
+        String normalized = StringUtils.hasText(source) ? source.trim().toUpperCase() : SOURCE_CLOUD;
+        if (!SOURCE_CLOUD.equals(normalized)) {
             throw new BusinessException("事件来源不合法");
         }
         return normalized;

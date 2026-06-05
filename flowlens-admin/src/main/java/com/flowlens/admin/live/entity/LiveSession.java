@@ -42,8 +42,6 @@ public class LiveSession {
 
     public static final String STATUS_ENDED = "ENDED";
 
-    public static final String SOURCE_CLIENT = "CLIENT";
-
     public static final String SOURCE_CLOUD = "CLOUD";
 
     public static final String SOURCE_NONE = "NONE";
@@ -114,10 +112,14 @@ public class LiveSession {
 
     public void end() {
         if (STATUS_ENDED.equals(status)) {
+            this.activeSource = SOURCE_NONE;
+            this.cloudTaskId = null;
+            this.updateTime = LocalDateTime.now();
             return;
         }
         this.status = STATUS_ENDED;
         this.activeSource = SOURCE_NONE;
+        this.cloudTaskId = null;
         this.endTime = LocalDateTime.now();
         this.updateTime = LocalDateTime.now();
     }
@@ -131,7 +133,7 @@ public class LiveSession {
             return SOURCE_NONE;
         }
         String normalized = source.trim().toUpperCase();
-        if (!SOURCE_CLIENT.equals(normalized) && !SOURCE_CLOUD.equals(normalized) && !SOURCE_NONE.equals(normalized)) {
+        if (!SOURCE_CLOUD.equals(normalized) && !SOURCE_NONE.equals(normalized)) {
             throw new BusinessException("采集源不合法");
         }
         return normalized;

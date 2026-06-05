@@ -1,10 +1,8 @@
 drop table if exists sys_role_menu;
 drop table if exists sys_user_role;
-drop table if exists live_event_raw_202606;
 drop table if exists live_event_202606;
 drop table if exists live_user_gift_stat;
 drop table if exists live_session_stat;
-drop table if exists live_event_raw;
 drop table if exists live_collector_task;
 drop table if exists live_event;
 drop table if exists live_session;
@@ -78,13 +76,9 @@ create table live_anchor (
     id bigint not null auto_increment comment '主播ID',
     anchor_name varchar(80) not null comment '主播名称',
     douyin_live_id varchar(80) comment '抖音直播间ID',
-    report_token varchar(80) not null comment '客户端上报密钥',
+    report_token varchar(80) not null comment '云端采集上报密钥',
     status tinyint not null default 1 comment '主播状态：1启用，0停用',
-    cloud_collect_enabled tinyint not null default 1 comment '是否启用云端兜底采集：1启用，0停用',
-    client_online tinyint not null default 0 comment '客户端是否在线：1在线，0离线',
-    client_instance_id varchar(120) comment '客户端实例ID',
-    client_version varchar(64) comment '客户端版本号',
-    client_last_heartbeat_time datetime comment '客户端最后心跳时间',
+    cloud_collect_enabled tinyint not null default 1 comment '是否启用云端监听：1启用，0停用',
     cloud_collecting tinyint not null default 0 comment '云端是否正在采集：1是，0否',
     create_time datetime not null default current_timestamp comment '创建时间',
     update_time datetime not null default current_timestamp on update current_timestamp comment '更新时间',
@@ -100,7 +94,7 @@ create table live_session (
     room_id varchar(80) comment '房间ID',
     live_title varchar(160) comment '直播标题',
     status varchar(24) not null comment '场次状态：LIVE直播中，ENDED已结束',
-    active_source varchar(24) not null comment '当前采集来源：CLIENT客户端，CLOUD云端，NONE无',
+    active_source varchar(24) not null comment '当前采集来源：CLOUD云端，NONE无',
     cloud_task_id bigint comment '当前云端采集任务ID',
     start_time datetime not null comment '开播时间',
     end_time datetime comment '结束时间',
@@ -120,7 +114,7 @@ create table live_event (
     live_id varchar(80) comment '直播间ID',
     msg_id varchar(120) comment '平台消息ID',
     event_type varchar(32) not null comment '事件类型：GIFT礼物，COMMENT评论，LIKE点赞，LIVE_END下播，MEMBER进房，FOLLOW关注，ROOM_STATS直播间统计',
-    source varchar(24) not null comment '事件来源：CLIENT客户端，CLOUD云端',
+    source varchar(24) not null comment '事件来源：CLOUD云端',
     user_id varchar(80) comment '观众用户ID',
     douyin_account varchar(120) comment '观众可搜索的抖音号',
     nickname varchar(120) comment '观众昵称',
@@ -140,22 +134,7 @@ create table live_event (
     key idx_live_event_douyin_account (douyin_account)
 ) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci comment='直播事件模板表';
 
-create table live_event_raw (
-    id bigint not null auto_increment comment '直播事件原始报文ID',
-    event_id bigint not null comment '直播事件ID',
-    session_id bigint not null comment '直播场次ID',
-    anchor_id bigint not null comment '主播ID',
-    raw_payload longtext not null comment '原始上报内容',
-    create_time datetime not null default current_timestamp comment '创建时间',
-    primary key (id),
-    unique key uk_live_event_raw_event (event_id),
-    key idx_live_event_raw_session (session_id),
-    key idx_live_event_raw_anchor_time (anchor_id, create_time)
-) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci comment='直播事件原始报文模板表';
-
 create table live_event_202606 like live_event;
-
-create table live_event_raw_202606 like live_event_raw;
 
 create table live_session_stat (
     id bigint not null auto_increment comment '直播场次统计ID',

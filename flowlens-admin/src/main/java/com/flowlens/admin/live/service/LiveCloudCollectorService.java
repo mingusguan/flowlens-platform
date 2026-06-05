@@ -34,7 +34,6 @@ public class LiveCloudCollectorService {
 
     @Scheduled(fixedDelayString = "${flowlens.live.collector.schedule-delay-ms:30000}")
     public void reconcileCollectors() {
-        liveDutyService.markStaleClientsOffline();
         liveDutyService.listRunningSessionEntities().forEach(this::reconcileSession);
     }
 
@@ -47,7 +46,6 @@ public class LiveCloudCollectorService {
                 collectorProperties.getExecutable());
             return;
         }
-        liveDutyService.markStaleClientsOffline();
         List<LiveAnchor> anchors = liveDutyService.listCloudProbeAnchorEntities();
         log.info("云端开播探测开始，候选主播数={}，probeDelayMs={}，probeTimeoutSeconds={}",
             anchors.size(),
@@ -64,13 +62,6 @@ public class LiveCloudCollectorService {
 
     private void reconcileSession(LiveSession session) {
         LiveAnchor anchor = liveDutyService.requireAnchor(session.getAnchorId());
-        if (anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())) {
-            // Prefer client collector while it is alive to avoid duplicate events.
-            stopCloudCollectors(session, "client online");
-            liveDutyService.switchSessionSource(session.getId(), LiveSession.SOURCE_CLIENT);
-            liveDutyService.markAnchorCloudCollecting(anchor.getId(), false);
-            return;
-        }
         if (!collectorProperties.canStartCloudCollector() || !anchor.canStartCloudCollect()) {
             stopCloudCollectors(session, "cloud disabled");
             liveDutyService.switchSessionSource(session.getId(), LiveSession.SOURCE_NONE);
@@ -88,11 +79,6 @@ public class LiveCloudCollectorService {
     private void probeAnchor(LiveAnchor anchor) {
         if (liveDutyService.hasRunningSession(anchor.getId())) {
             log.info("云端开播探测跳过，主播已有直播场次，anchorId={}, liveId={}",
-                anchor.getId(), anchor.getDouyinLiveId());
-            return;
-        }
-        if (anchor.isClientAlive(collectorProperties.getClientTimeoutSeconds())) {
-            log.info("云端开播探测跳过，客户端仍在线，anchorId={}, liveId={}",
                 anchor.getId(), anchor.getDouyinLiveId());
             return;
         }
@@ -135,9 +121,10 @@ public class LiveCloudCollectorService {
         liveDutyService.saveCollectorTask(task);
         Process process = null;
         try {
-            process = new ProcessBuilder(buildCommand(session, anchor))
-                .redirectErrorStream(true)
-                .start();
+            ProcessBuilder processBuilder = new ProcessBuilder(buildCommand(session, anchor))
+                .redirectErrorStream(true);
+            applyPythonUtf8Environment(processBuilder);
+            process = processBuilder.start();
             task.markRunning(process.pid());
             liveDutyService.saveCollectorTask(task);
             liveDutyService.bindCloudTask(session, task);
@@ -226,12 +213,11 @@ public class LiveCloudCollectorService {
                     }
                 }
                 int exitCode = process.waitFor();
-                if (exitCode == 0) {
-                    task.markStopped("process exited with code 0");
-                } else {
-                    task.markFailed("process exited with code " + exitCode);
+                if (!liveDutyService.finishCollectorTaskIfActive(task, exitCode)) {
+                    log.info("云端采集任务已由业务流程收口，taskId={}, sessionId={}, exitCode={}",
+                        task.getId(), task.getSessionId(), exitCode);
+                    return;
                 }
-                liveDutyService.saveCollectorTask(task);
                 if (liveDutyService.endSessionIfCurrentCloudTask(task.getSessionId(), task.getId())) {
                     liveDutyService.markAnchorCloudCollecting(task.getAnchorId(), false);
                     log.info("云端采集进程退出，自动结束直播场次，taskId={}, sessionId={}, anchorId={}",
@@ -254,7 +240,7 @@ public class LiveCloudCollectorService {
         tasks.forEach(task -> {
             if (task.getProcessId() != null) {
                 ProcessHandle.of(task.getProcessId()).ifPresent(process -> {
-                    // Stop the room-level cloud collector when client mode takes over.
+                    // 云端复探确认无需继续采集时，停止对应直播间的采集进程。
                     process.destroy();
                 });
             }
@@ -276,9 +262,10 @@ public class LiveCloudCollectorService {
         Process process = null;
         CompletableFuture<String> outputFuture = null;
         try {
-            process = new ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .start();
+            ProcessBuilder processBuilder = new ProcessBuilder(command)
+                .redirectErrorStream(true);
+            applyPythonUtf8Environment(processBuilder);
+            process = processBuilder.start();
             Process runningProcess = process;
             outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(runningProcess));
             boolean finished = process.waitFor(collectorProperties.getProbeTimeoutSeconds(), TimeUnit.SECONDS);
@@ -341,6 +328,12 @@ public class LiveCloudCollectorService {
             textOrNull(result.path("liveTitle")),
             textOrNull(result.path("error"))
         );
+    }
+
+    private void applyPythonUtf8Environment(ProcessBuilder processBuilder) {
+        // Windows 默认控制台编码可能是 GBK，直播标题包含特殊字符时会导致 Python print 失败。
+        processBuilder.environment().put("PYTHONIOENCODING", "utf-8");
+        processBuilder.environment().put("PYTHONUTF8", "1");
     }
 
     private String readProcessOutput(Process process) {

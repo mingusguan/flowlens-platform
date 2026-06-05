@@ -28,6 +28,7 @@ Probe example:
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -42,7 +43,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 LOG = logging.getLogger("flowlens.saermart_adapter")
@@ -57,6 +58,19 @@ DESKTOP_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0"
 )
 UNSAFE_TEXT_CHARS = {"\ufffc", "\ufffd"}
+GIFT_METHOD_KEYWORDS = ("gift", "combo", "tray", "ticket", "profit", "reward", "commerce", "asset")
+SOCIAL_METHOD_KEYWORDS = ("social", "follow")
+
+
+def configure_stdio_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def print_probe_result(result: dict[str, Any]) -> None:
+    print(json.dumps(result, ensure_ascii=True), flush=True)
 
 
 @dataclass(frozen=True)
@@ -163,13 +177,6 @@ def msg_id(msg: Any) -> str | None:
         or scalar(nested(msg, "common", "msgId"), None)
     )
     return str(value) if value else None
-
-
-def as_jsonable(obj: Any) -> str:
-    try:
-        return json.dumps(obj, default=lambda item: getattr(item, "__dict__", str(item)), ensure_ascii=False)
-    except TypeError:
-        return str(obj)
 
 
 def extract_candidate(value: str | None) -> str | None:
@@ -402,6 +409,30 @@ def compact_text(value: str, limit: int = 240) -> str:
     return cleaned[:limit]
 
 
+def payload_text_fragments(payload: Any, limit: int = 8) -> list[str]:
+    if not isinstance(payload, (bytes, bytearray)):
+        return []
+    decoded = bytes(payload).decode("utf-8", "ignore")
+    fragments: list[str] = []
+    current: list[str] = []
+
+    def flush_current() -> None:
+        if not current:
+            return
+        text = clean_event_text("".join(current), "")
+        current.clear()
+        if text and len(text) >= 2 and text not in fragments:
+            fragments.append(text)
+
+    for char in decoded:
+        if char.isprintable() and not unicodedata.category(char).startswith("C"):
+            current.append(char)
+            continue
+        flush_current()
+    flush_current()
+    return fragments[:limit]
+
+
 def response_json(response: Any) -> dict[str, Any]:
     try:
         return response.json()
@@ -457,9 +488,15 @@ def probe_room_once(fetcher: Any, douyin_module: Any, room_id: str) -> dict[str,
     a_bogus = fetcher.get_a_bogus(params)
     url += f"&a_bogus={a_bogus}"
     headers = fetcher.headers.copy()
+    base_cookie = ""
+    if hasattr(fetcher, "session") and hasattr(fetcher.session, "headers"):
+        base_cookie = fetcher.session.headers.get("Cookie", "") or ""
+    if not base_cookie:
+        base_cookie = headers.get("Cookie", "") or ""
+    signed_cookie = merge_cookie_header(base_cookie, f"ttwid={fetcher.ttwid};__ac_nonce={nonce}; __ac_signature={signature}")
     headers.update({
         "Referer": f"https://live.douyin.com/{fetcher.live_id}",
-        "Cookie": f"ttwid={fetcher.ttwid};__ac_nonce={nonce}; __ac_signature={signature}",
+        "Cookie": signed_cookie,
     })
     response = fetcher.session.get(url, headers=headers)
     response.raise_for_status()
@@ -477,6 +514,26 @@ def probe_room_once(fetcher: Any, douyin_module: Any, room_id: str) -> dict[str,
         "nickname": scalar(user.get("nickname"), None),
         "liveTitle": scalar(data.get("title"), None) or scalar(room.get("title"), None),
     }
+
+
+def merge_cookie_header(*values: str | None) -> str:
+    pairs: dict[str, str] = {}
+    order: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for part in value.split(";"):
+            item = part.strip()
+            if not item or "=" not in item:
+                continue
+            name, cookie_value = item.split("=", 1)
+            key = name.strip()
+            if not key:
+                continue
+            if key not in pairs:
+                order.append(key)
+            pairs[key] = cookie_value.strip()
+    return "; ".join(f"{key}={pairs[key]}" for key in order)
 
 
 def reflow_probe_result(resolved: ResolvedLiveInput, error: str | None = None) -> dict[str, Any]:
@@ -508,11 +565,86 @@ def merge_probe_result(result: dict[str, Any], resolved: ResolvedLiveInput) -> d
     return merged
 
 
-def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: EventReporter):
+def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: EventReporter, request_stop: Callable[[], None] | None = None):
     class ReportingDouyinLiveWebFetcher(base_class):  # type: ignore[misc, valid-type]
+        def _wsOnMessage(self, ws: Any, message: Any) -> None:  # noqa: N802
+            try:
+                package = douyin_module.PushFrame().parse(message)
+                response = douyin_module.Response().parse(gzip.decompress(package.payload))
+            except Exception:
+                LOG.exception("cannot decode websocket message")
+                return
+
+            self._send_ack_if_needed(ws, package, response)
+            for item in getattr(response, "messages_list", []) or []:
+                self._dispatch_message(item)
+
+        def _send_ack_if_needed(self, ws: Any, package: Any, response: Any) -> None:
+            if not getattr(response, "need_ack", False):
+                return
+            try:
+                ack = douyin_module.PushFrame(
+                    log_id=package.log_id,
+                    payload_type="ack",
+                    payload=response.internal_ext.encode("utf-8"),
+                ).SerializeToString()
+                ws.send(ack, 2)
+            except Exception:
+                LOG.exception("cannot send websocket ack")
+
+        def _dispatch_message(self, item: Any, source: str = "ws") -> None:
+            method = getattr(item, "method", "")
+            payload = getattr(item, "payload", b"")
+            handlers = {
+                "WebcastChatMessage": self._parseChatMsg,
+                "WebcastGiftMessage": self._parseGiftMsg,
+                "WebcastLikeMessage": self._parseLikeMsg,
+                "WebcastSocialMessage": self._parseSocialMsg,
+                "WebcastRoomUserSeqMessage": self._parseRoomUserSeqMsg,
+                "WebcastControlMessage": self._parseControlMsg,
+            }
+            handler = handlers.get(method)
+            if handler is None:
+                self._inspect_unhandled_message(method, payload)
+                return
+            try:
+                handler(payload)
+            except Exception:
+                LOG.exception("cannot parse douyin message source=%s method=%s", source, method)
+                self._inspect_unhandled_message(method, payload)
+
+        def _parse_unknown_important_messages(self, message: Any) -> None:
+            try:
+                package = douyin_module.PushFrame().parse(message)
+                response = douyin_module.Response().parse(gzip.decompress(package.payload))
+                for item in getattr(response, "messages_list", []):
+                    method = getattr(item, "method", "")
+                    lower_method = method.lower()
+                    if method not in {"WebcastGiftMessage", "WebcastSocialMessage"} and any(
+                        keyword in lower_method for keyword in GIFT_METHOD_KEYWORDS
+                    ):
+                        LOG.info("fallback parsing gift-like douyin message method=%s", method)
+                        self._parseGiftMsg(item.payload)
+                    if method != "WebcastSocialMessage" and any(keyword in lower_method for keyword in SOCIAL_METHOD_KEYWORDS):
+                        LOG.info("fallback parsing social-like douyin message method=%s", method)
+                        self._parseSocialMsg(item.payload)
+            except Exception:
+                LOG.debug("fallback douyin message inspection failed", exc_info=True)
+
+        def _inspect_unhandled_message(self, method: str, payload: Any) -> None:
+            lower_method = method.lower()
+            fragments = payload_text_fragments(payload)
+            gift_like = any(keyword in lower_method for keyword in GIFT_METHOD_KEYWORDS)
+            social_like = any(keyword in lower_method for keyword in SOCIAL_METHOD_KEYWORDS)
+            if gift_like or social_like:
+                LOG.info(
+                    "unhandled important douyin message method=%s payloadText=%s",
+                    method,
+                    " | ".join(fragments)[:300],
+                )
+
         def _parseChatMsg(self, payload: Any) -> None:  # noqa: N802
             message = douyin_module.ChatMessage().parse(payload)
-            super()._parseChatMsg(payload)
             user = getattr(message, "user", None)
             reporter.post_event({
                 "eventType": "COMMENT",
@@ -522,12 +654,14 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "nickname": clean_event_text(nickname(user)),
                 "content": clean_event_text(scalar(getattr(message, "content", None), ""), "") or "",
                 "eventTime": iso_now(),
-                "rawPayload": as_jsonable(message),
             })
+            try:
+                super()._parseChatMsg(payload)
+            except Exception:
+                LOG.debug("original chat message printing failed", exc_info=True)
 
         def _parseGiftMsg(self, payload: Any) -> None:  # noqa: N802
             message = douyin_module.GiftMessage().parse(payload)
-            super()._parseGiftMsg(payload)
             user = getattr(message, "user", None)
             gift = getattr(message, "gift", None)
             gift_count = (
@@ -535,7 +669,9 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 or scalar(getattr(message, "comboCount", None), 0)
                 or scalar(getattr(message, "repeat_count", None), 0)
                 or scalar(getattr(message, "repeatCount", None), 0)
-                or 0
+                or scalar(getattr(message, "total_count", None), 0)
+                or scalar(getattr(message, "totalCount", None), 0)
+                or 1
             )
             gift_value = (
                 scalar(getattr(gift, "diamond_count", None), 0)
@@ -553,12 +689,14 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "giftCount": int(gift_count),
                 "giftValue": int(gift_value) * int(gift_count or 1),
                 "eventTime": iso_now(),
-                "rawPayload": as_jsonable(message),
             })
+            try:
+                super()._parseGiftMsg(payload)
+            except Exception:
+                LOG.debug("original gift message printing failed", exc_info=True)
 
         def _parseLikeMsg(self, payload: Any) -> None:  # noqa: N802
             message = douyin_module.LikeMessage().parse(payload)
-            super()._parseLikeMsg(payload)
             user = getattr(message, "user", None)
             like_count = scalar(getattr(message, "count", None), 0) or scalar(getattr(message, "total", None), 0) or 0
             reporter.post_event({
@@ -569,12 +707,31 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "nickname": clean_event_text(nickname(user)),
                 "likeCount": int(like_count),
                 "eventTime": iso_now(),
-                "rawPayload": as_jsonable(message),
             })
+            try:
+                super()._parseLikeMsg(payload)
+            except Exception:
+                LOG.debug("original like message printing failed", exc_info=True)
+
+        def _parseSocialMsg(self, payload: Any) -> None:  # noqa: N802
+            message = douyin_module.SocialMessage().parse(payload)
+            user = getattr(message, "user", None)
+            reporter.post_event({
+                "eventType": "FOLLOW",
+                "msgId": msg_id(message),
+                "userId": user_id(user),
+                "douyinAccount": douyin_account(user),
+                "nickname": clean_event_text(nickname(user)),
+                "content": clean_event_text(scalar(getattr(message, "share_target", None), None)),
+                "eventTime": iso_now(),
+            })
+            try:
+                super()._parseSocialMsg(payload)
+            except Exception:
+                LOG.debug("original social message printing failed", exc_info=True)
 
         def _parseRoomUserSeqMsg(self, payload: Any) -> None:  # noqa: N802
             message = douyin_module.RoomUserSeqMessage().parse(payload)
-            super()._parseRoomUserSeqMsg(payload)
             viewer_count = (
                 int_or_none(getattr(message, "total_pv_for_anchor", None))
                 or int_or_none(getattr(message, "total_user", None))
@@ -586,8 +743,11 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                 "msgId": msg_id(message),
                 "viewerCount": int(viewer_count),
                 "eventTime": iso_now(),
-                "rawPayload": as_jsonable(message),
             })
+            try:
+                super()._parseRoomUserSeqMsg(payload)
+            except Exception:
+                LOG.debug("original room user seq message printing failed", exc_info=True)
 
         def _parseControlMsg(self, payload: Any) -> None:  # noqa: N802
             message = douyin_module.ControlMessage().parse(payload)
@@ -597,9 +757,14 @@ def make_reporting_fetcher(base_class: type, douyin_module: Any, reporter: Event
                     "eventType": "LIVE_END",
                     "msgId": msg_id(message),
                     "eventTime": iso_now(),
-                    "rawPayload": as_jsonable(message),
                 })
-            super()._parseControlMsg(payload)
+                if request_stop is not None:
+                    LOG.info("live end control message received, stopping collector")
+                    request_stop()
+            try:
+                super()._parseControlMsg(payload)
+            except Exception:
+                LOG.debug("original control message printing failed", exc_info=True)
 
     return ReportingDouyinLiveWebFetcher
 
@@ -633,6 +798,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_stdio_encoding()
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
     base_class, douyin_module = build_fetcher_class(Path(args.fetcher_path).resolve())
@@ -650,10 +816,10 @@ def main() -> int:
     )
     if args.probe:
         if resolved_input.source == "reflow" and resolved_input.live is False:
-            print(json.dumps(reflow_probe_result(resolved_input), ensure_ascii=False), flush=True)
+            print_probe_result(reflow_probe_result(resolved_input))
             return 0
         if not live_id:
-            print(json.dumps(reflow_probe_result(resolved_input, "live_id_not_found"), ensure_ascii=False), flush=True)
+            print_probe_result(reflow_probe_result(resolved_input, "live_id_not_found"))
             return 0
         room = base_class(live_id)
         set_fetcher_room_id(room, room_id)
@@ -669,7 +835,7 @@ def main() -> int:
             result = reflow_probe_result(reflow_result, result.get("error") or "pc_probe_failed")
         else:
             result = merge_probe_result(result, resolved_input)
-        print(json.dumps(result, ensure_ascii=False), flush=True)
+        print_probe_result(result)
         return 0
 
     if not live_id:
@@ -678,19 +844,22 @@ def main() -> int:
     if not room_id:
         resolved_for_room = resolve_live_input(live_id, None)
         room_id = first_text(resolved_for_room.room_id, room_id)
-    reporter = EventReporter(args.backend_url, args.anchor_id, args.token, live_id, room_id)
-    fetcher_class = make_reporting_fetcher(base_class, douyin_module, reporter)
-    room = fetcher_class(live_id)
-    set_fetcher_room_id(room, room_id)
-
     should_stop = False
 
-    def handle_signal(signum: int, _frame: Any) -> None:
+    def request_stop() -> None:
         nonlocal should_stop
-        LOG.info("received signal=%s, stopping collector", signum)
         should_stop = True
         if hasattr(room, "stop"):
             room.stop()
+
+    reporter = EventReporter(args.backend_url, args.anchor_id, args.token, live_id, room_id)
+    fetcher_class = make_reporting_fetcher(base_class, douyin_module, reporter, request_stop)
+    room = fetcher_class(live_id)
+    set_fetcher_room_id(room, room_id)
+
+    def handle_signal(signum: int, _frame: Any) -> None:
+        LOG.info("received signal=%s, stopping collector", signum)
+        request_stop()
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)

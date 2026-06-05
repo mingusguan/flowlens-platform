@@ -8,8 +8,6 @@ public final class LiveEventTableRouter {
 
     public static final String EVENT_TABLE = "live_event";
 
-    public static final String RAW_TABLE = "live_event_raw";
-
     private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("yyyyMM");
 
     private static final ThreadLocal<String> MONTH_SUFFIX = new ThreadLocal<>();
@@ -38,7 +36,7 @@ public final class LiveEventTableRouter {
         if (!StringUtils.hasText(monthSuffix)) {
             return tableName;
         }
-        if (EVENT_TABLE.equals(tableName) || RAW_TABLE.equals(tableName)) {
+        if (EVENT_TABLE.equals(tableName)) {
             return tableName + "_" + monthSuffix;
         }
         return tableName;
@@ -46,10 +44,6 @@ public final class LiveEventTableRouter {
 
     public static String monthlyEventTable(String monthSuffix) {
         return EVENT_TABLE + "_" + requireMonthSuffix(monthSuffix);
-    }
-
-    public static String monthlyRawTable(String monthSuffix) {
-        return RAW_TABLE + "_" + requireMonthSuffix(monthSuffix);
     }
 
     private static String requireMonthSuffix(String monthSuffix) {

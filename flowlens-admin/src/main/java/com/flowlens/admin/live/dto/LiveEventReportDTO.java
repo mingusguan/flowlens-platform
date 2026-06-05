@@ -49,5 +49,4 @@ public class LiveEventReportDTO {
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime eventTime;
 
-    private String rawPayload;
 }

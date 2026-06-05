@@ -1,16 +1,3 @@
-create table if not exists live_event_raw (
-    id bigint not null auto_increment comment '直播事件原始报文ID',
-    event_id bigint not null comment '直播事件ID',
-    session_id bigint not null comment '直播场次ID',
-    anchor_id bigint not null comment '主播ID',
-    raw_payload longtext not null comment '原始上报内容',
-    create_time datetime not null default current_timestamp comment '创建时间',
-    primary key (id),
-    unique key uk_live_event_raw_event (event_id),
-    key idx_live_event_raw_session (session_id),
-    key idx_live_event_raw_anchor_time (anchor_id, create_time)
-) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci comment='直播事件原始报文表';
-
 create table if not exists live_session_stat (
     id bigint not null auto_increment comment '直播场次统计ID',
     session_id bigint not null comment '直播场次ID',
@@ -45,11 +32,6 @@ create table if not exists live_user_gift_stat (
     key idx_live_user_gift_session_value (session_id, gift_value),
     key idx_live_user_gift_douyin_account (douyin_account)
 ) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci comment='直播用户礼物统计表';
-
-insert ignore into live_event_raw (event_id, session_id, anchor_id, raw_payload, create_time)
-select id, session_id, anchor_id, raw_payload, create_time
-from live_event
-where raw_payload is not null and raw_payload <> '';
 
 insert into live_session_stat (
     session_id,
